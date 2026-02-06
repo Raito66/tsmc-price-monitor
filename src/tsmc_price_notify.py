@@ -61,7 +61,11 @@ def get_tsmc_price(max_retries=3):
 def main():
     # 取得台灣時間
     now = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
-
+    
+    # ✅ 在日志中打印台湾时间
+    print(f"🕐 台灣時間：{now}")
+    print(f"🕐 UTC 時間：{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
+    
     price = get_tsmc_price()
     if price is None:
         send_line_push(f"【台積電監控】\n{now}\n⚠️ 無法取得最新成交價")
