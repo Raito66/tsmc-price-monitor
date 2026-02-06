@@ -3,7 +3,7 @@
 
 import requests
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ======================== 環境變數 ========================
 
@@ -59,7 +59,8 @@ def get_tsmc_price(max_retries=3):
     return None
 
 def main():
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 取得台灣時間
+    now = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
     price = get_tsmc_price()
     if price is None:
