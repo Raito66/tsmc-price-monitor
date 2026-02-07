@@ -1,5 +1,5 @@
 # 台積電價格監控 - 使用 Google Sheets 永久儲存
-# 策略：多均線分析 + Google Sheets 雲端儲存
+# 策略：多均線分析 + Google Sheets 雲端儲存 + 進階年度分析
 
 import requests
 import os
@@ -38,7 +38,7 @@ API_URL = (
 )
 
 # 歷史資料設定
-HISTORY_DAYS = 60  # 保留 60 天資料
+HISTORY_DAYS = 365  # 保留一年資料（進階分析）
 SHEET_NAME = "Sheet1"  # 工作表名稱
 
 # ==========================================================
@@ -183,7 +183,7 @@ def save_to_sheets(service, date: str, price: float, ma5: Optional[float],
         print(f"⚠️ 寫入 Sheets 失敗：{e}")
         return False
 
-def cleanup_old_data(service, keep_days: int = 60):
+def cleanup_old_data(service, keep_days: int = 365):
     """清理超過指定天數的舊資料"""
     if not service:
         return
@@ -257,9 +257,67 @@ def analyze_trend(history: List[Dict], days: int = 3) -> tuple:
     
     return "整理中", "📊"
 
+# ==================== 進階分析功能 ====================
+
+def get_yearly_stats(history: List[Dict]) -> Dict:
+    """計算年度統計資料"""
+    if len(history) < 30:  # 至少需要一個月資料
+        return {}
+    
+    prices = [h['price'] for h in history]
+    
+    stats = {
+        'max_price': max(prices),
+        'min_price': min(prices),
+        'avg_price': sum(prices) / len(prices),
+        'current_price': prices[-1]
+    }
+    
+    # 找出最高價和最低價的日期
+    for h in history:
+        if h['price'] == stats['max_price']:
+            stats['max_date'] = h['date']
+        if h['price'] == stats['min_price']:
+            stats['min_date'] = h['date']
+    
+    # 計算距離高低點的百分比
+    stats['from_high_pct'] = ((stats['current_price'] - stats['max_price']) / stats['max_price']) * 100
+    stats['from_low_pct'] = ((stats['current_price'] - stats['min_price']) / stats['min_price']) * 100
+    
+    return stats
+
+def get_long_term_trend(history: List[Dict]) -> str:
+    """判斷長期趨勢（30/60/90天）"""
+    if len(history) < 90:
+        return ""
+    
+    ma30 = calculate_ma(history, 30)
+    ma60 = calculate_ma(history, 60)
+    ma90 = calculate_ma(history, 90)
+    
+    if not all([ma30, ma60, ma90]):
+        return ""
+    
+    current = history[-1]['price']
+    
+    # 多頭格局：短 > 中 > 長
+    if current > ma30 > ma60 > ma90:
+        return "📈 長期多頭（30>60>90）"
+    # 空頭格局：短 < 中 < 長
+    elif current < ma30 < ma60 < ma90:
+        return "📉 長期空頭（30<60<90）"
+    # 轉多訊號
+    elif current > ma30 and ma30 > ma60:
+        return "💡 轉多訊號（突破中期均線）"
+    # 轉弱訊號
+    elif current < ma30 and ma30 < ma60:
+        return "⚠️ 轉弱訊號（跌破中期均線）"
+    else:
+        return "📊 區間整理"
+
 def get_smart_suggestion(price: float, history: List[Dict], ma5: Optional[float], 
                          ma20: Optional[float], ma60: Optional[float]) -> List[str]:
-    """智能買賣建議"""
+    """智能買賣建議（加強版）"""
     suggestions = []
     
     if len(history) < 3:
@@ -268,6 +326,25 @@ def get_smart_suggestion(price: float, history: List[Dict], ma5: Optional[float]
     
     trend_desc, trend_icon = analyze_trend(history, days=3)
     
+    # 加入年度統計
+    yearly_stats = get_yearly_stats(history)
+    if yearly_stats:
+        # 如果接近年度低點（5%以內）
+        if yearly_stats['from_low_pct'] < 5:
+            suggestions.append("🎯 接近年度低點，關注買點")
+            suggestions.append(f"   年度低點：{yearly_stats['min_price']:.2f}（{yearly_stats.get('min_date', 'N/A')}）")
+        
+        # 如果接近年度高點（5%以內）
+        if yearly_stats['from_high_pct'] > -5:
+            suggestions.append("⚠️ 接近年度高點，注意風險")
+            suggestions.append(f"   年度高點：{yearly_stats['max_price']:.2f}（{yearly_stats.get('max_date', 'N/A')}）")
+    
+    # 加入長期趨勢
+    long_term = get_long_term_trend(history)
+    if long_term:
+        suggestions.append(long_term)
+    
+    # 原有的短期分析
     # 強烈買入：多頭排列 + 止跌反彈
     if (ma5 and ma20 and ma60 and 
         price > ma5 > ma20 > ma60 and 
@@ -396,6 +473,9 @@ def main():
     # 智能建議
     suggestions = get_smart_suggestion(price, history, ma5, ma20, ma60)
     
+    # 年度統計
+    yearly_stats = get_yearly_stats(history)
+    
     # ==================== 組合訊息 ====================
     
     msg_parts = []
@@ -408,9 +488,23 @@ def main():
     msg_parts.append(f"昨收：{yesterday_close:.2f} 元")
     msg_parts.append(f"漲跌：{change_amount:+.2f} 元（{change_percent:+.2f}%）")
     
+    # 年度統計
+    if yearly_stats and len(history) >= 30:
+        msg_parts.append("━━━━━━━━━━━━━━")
+        msg_parts.append("📊 年度統計")
+        msg_parts.append(f"最高：{yearly_stats['max_price']:.2f} 元（{yearly_stats.get('max_date', 'N/A')}）")
+        msg_parts.append(f"最低：{yearly_stats['min_price']:.2f} 元（{yearly_stats.get('min_date', 'N/A')}）")
+        msg_parts.append(f"均價：{yearly_stats['avg_price']:.2f} 元")
+        
+        # 距離高低點
+        if yearly_stats['from_high_pct'] < 0:
+            msg_parts.append(f"距高點：{yearly_stats['from_high_pct']:.1f}%")
+        if yearly_stats['from_low_pct'] > 0:
+            msg_parts.append(f"距低點：+{yearly_stats['from_low_pct']:.1f}%")
+    
     if ma5 or ma20 or ma60:
         msg_parts.append("━━━━━━━━━━━━━━")
-        msg_parts.append("📊 技術分析")
+        msg_parts.append("📈 技術分析")
         
         if ma5:
             icon = "✅" if price > ma5 else "⚠️"
@@ -441,6 +535,8 @@ def main():
         print(f"   MA20：{ma20:.2f}")
     if ma60:
         print(f"   MA60：{ma60:.2f}")
+    if yearly_stats:
+        print(f"   年度高點：{yearly_stats.get('max_price', 0):.2f}，低點：{yearly_stats.get('min_price', 0):.2f}")
 
 if __name__ == "__main__":
     main()
