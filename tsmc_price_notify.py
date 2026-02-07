@@ -4,10 +4,14 @@
 import requests
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+import urllib3
+
+# 關閉 SSL 警告訊息（因為證交所憑證問題）
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ======================== 環境變數 ========================
 
@@ -86,9 +90,17 @@ def send_line_push(message: str):
 
 def get_tsmc_data(max_retries=3) -> Optional[Dict]:
     """取得台積電股價資訊（現價 + 昨收）"""
-    for _ in range(max_retries):
+    for attempt in range(max_retries):
         try:
-            r = requests.get(API_URL, timeout=10)
+            # 優先嘗試正常 SSL 驗證
+            try:
+                r = requests.get(API_URL, timeout=10, verify=True)
+            except requests.exceptions.SSLError:
+                # SSL 驗證失敗，使用無驗證模式
+                if attempt == 0:
+                    print("⚠️ SSL 驗證失敗，使用無驗證模式連線證交所")
+                r = requests.get(API_URL, timeout=10, verify=False)
+            
             data = r.json()
             if data.get("msgArray"):
                 stock_data = data["msgArray"][0]
@@ -103,7 +115,7 @@ def get_tsmc_data(max_retries=3) -> Optional[Dict]:
                         "yesterday_close": float(yesterday_str)
                     }
         except Exception as e:
-            print(f"⚠️ API 請求失敗：{e}")
+            print(f"⚠️ API 請求失敗（第 {attempt + 1}/{max_retries} 次）：{e}")
     return None
 
 # ==================== Google Sheets 操作 ====================
@@ -332,9 +344,11 @@ def get_smart_suggestion(price: float, history: List[Dict], ma5: Optional[float]
 # ==================== 主程式 ====================
 
 def main():
-    # 取得台灣時間
-    now = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
-    today = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d")
+    # 取得台灣時間（使用新的 timezone-aware 方式）
+    taipei_tz = timezone(timedelta(hours=8))
+    now_dt = datetime.now(timezone.utc).astimezone(taipei_tz)
+    now = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    today = now_dt.strftime("%Y-%m-%d")
     
     print(f"🕐 台灣時間：{now}")
     
