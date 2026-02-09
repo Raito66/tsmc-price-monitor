@@ -74,10 +74,11 @@ def send_discord_push(message: str):
         write_log(f"Discord 推播失敗：{e}")
 
 def write_log(msg):
+    now_str = datetime.now().strftime('%Y年%m月%d日 %H時%M分%S秒')
     with open("error.log", "a", encoding="utf-8") as f:
-        f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+        f.write(f"{now_str} {msg}\n")
     # 也印出到 console 方便 debug
-    print(msg)
+    print(f"{now_str} {msg}")
 
 # ======================== 核心函式 ========================
 
@@ -220,7 +221,7 @@ def save_to_sheets(service, stock_id, stock_name, date, price, ma5, ma20, ma60, 
 def main():
     tz = timezone(timedelta(hours=8))
     now = datetime.now(tz)
-    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    now_str = now.strftime("%Y年%m月%d日 %H時%M分%S秒")
     hour = now.hour
     minute = now.minute
 
@@ -287,7 +288,8 @@ def main():
         # 只在 13:31~13:59 推播昨日收盤價
         if is_yesterday_push:
             msg = [
-                f"【{stock_id} {stock_name} 昨日收盤價】",
+                f"---",
+                f"【{stock_id} {stock_name} 昨日收盤價 {now.strftime('%Y年%m月%d日')}】",
                 f"時間：{now_str}",
                 "━━━━━━━━━━━━━━",
                 f"昨收：{yesterday:.2f} 元",
@@ -305,7 +307,8 @@ def main():
         # 只在 14:00 之後推播今日收盤價
         if is_today_push and stock["is_after_close"] and "close_price" in stock:
             msg = [
-                f"【{stock_id} {stock_name} 價格監控】",
+                f"---",
+                f"【{stock_id} {stock_name} 價格監控 {now.strftime('%Y年%m月%d日')}】",
                 f"時間：{now_str}",
                 "━━━━━━━━━━━━━━",
                 f"現價：{latest:.2f} 元",
