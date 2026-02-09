@@ -1,4 +1,4 @@
-# TSMC-Notify (多股價格監控自動推播)
+# stock-multi-notify (多股價格監控自動推播)
 
 本專案可自動監控多檔台股股票，推播即時/收盤價、均線、建議等資訊到 Discord，並同步寫入 Google Sheets。
 
