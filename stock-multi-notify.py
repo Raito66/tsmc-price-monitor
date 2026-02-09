@@ -219,12 +219,18 @@ def main():
     tz = timezone(timedelta(hours=8))
     now = datetime.now(tz)
     now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    hour = now.hour
+    minute = now.minute
 
     write_log(f"🕐 台灣時間：{now_str}")
 
     service = get_sheets_service()
     dl = DataLoader()
     dl.login_by_token(FINMIND_TOKEN)
+
+    # 判斷執行時段
+    is_yesterday_push = (hour == 13 and 31 <= minute < 59)
+    is_today_push = (hour >= 14)
 
     for stock_id in STOCK_LIST:
         stock_name = STOCK_NAME_MAP.get(stock_id, stock_id)
@@ -245,8 +251,8 @@ def main():
         change = latest - yesterday
         pct = change / yesterday * 100 if yesterday else 0
 
-        # 判斷盤後剛開始時（13:30~14:00），先推播昨天收盤價
-        if stock["is_after_close"] and "close_price" not in stock:
+        # 只在 13:31~13:59 推播昨日收盤價
+        if is_yesterday_push:
             msg = [
                 f"【{stock_id} {stock_name} 昨日收盤價】",
                 f"時間：{now_str}",
@@ -262,26 +268,29 @@ def main():
             write_log(f"{stock_id} 推播完成（昨日收盤價）")
             continue
 
-        msg = [
-            f"【{stock_id} {stock_name} 價格監控】",
-            f"時間：{now_str}",
-            "━━━━━━━━━━━━━━",
-            f"現價：{latest:.2f} 元",
-            f"昨收：{yesterday:.2f} 元",
-            f"漲跌：{change:+.2f}（{pct:+.2f}%）",
-            f"5日均線：{ma5:.2f}" if ma5 is not None else "5日均線：無資料",
-            f"20日均線：{ma20:.2f}" if ma20 is not None else "20日均線：無資料",
-            f"60日均線：{ma60:.2f}" if ma60 is not None else "60日均線：無資料"
-        ]
-
-        if stock["is_after_close"] and "close_price" in stock:
-            msg.append(f"今日收盤：{stock['close_price']:.2f} 元")
+        # 只在 14:00 之後推播今日收盤價
+        if is_today_push and stock["is_after_close"] and "close_price" in stock:
+            msg = [
+                f"【{stock_id} {stock_name} 價格監控】",
+                f"時間：{now_str}",
+                "━━━━━━━━━━━━━━",
+                f"現價：{latest:.2f} 元",
+                f"昨收：{yesterday:.2f} 元",
+                f"漲跌：{change:+.2f}（{pct:+.2f}%）",
+                f"5日均線：{ma5:.2f}" if ma5 is not None else "5日均線：無資料",
+                f"20日均線：{ma20:.2f}" if ma20 is not None else "20日均線：無資料",
+                f"60日均線：{ma60:.2f}" if ma60 is not None else "60日均線：無資料",
+                f"今日收盤：{stock['close_price']:.2f} 元",
+                "※ 資料來源：FinMind（付費版）"
+            ]
             save_to_sheets(service, stock_id, stock_name, stock["date"], stock["close_price"], ma5, ma20, ma60, now_str)
+            send_line_push("\n".join(msg))
+            write_log(f"{stock_id} LINE 推播內容：\n" + "\n".join(msg))
+            write_log(f"{stock_id} 推播完成（今日收盤價）")
+            continue
 
-        msg.append("※ 資料來源：FinMind（付費版）")
-        send_line_push("\n".join(msg))
-        write_log(f"{stock_id} LINE 推播內容：\n" + "\n".join(msg))
-        write_log(f"{stock_id} 推播完成")
+        # 其他時段不推播
+        write_log(f"{stock_id} 非推播時段，不執行推播。")
 
 if __name__ == "__main__":
     main()
