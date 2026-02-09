@@ -1,6 +1,12 @@
+# 核心套件（Google Sheets 使用）
 requests==2.31.0
 google-auth==2.27.0
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 google-api-python-client==2.116.0
-yfinance
+
+# FinMind（取代 yfinance）
+FinMind>=1.0.0
+
+# 可選（如果有使用 pandas 或其他資料處理，建議加上）
+pandas>=2.0.0

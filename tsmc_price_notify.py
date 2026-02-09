@@ -1,5 +1,5 @@
 # 台積電價格監控 - 使用 Google Sheets 永久儲存
-# 資料來源：改用 yfinance (更穩定，不受證交所 API 限制)
+# 資料來源：FinMind (台灣本土最完整免費股市資料源)
 # 策略：多均線分析 + Google Sheets 雲端儲存 + 進階年度分析
 
 import os
@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-import yfinance as yf
+from FinMind.data import DataLoader
 import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -18,6 +18,7 @@ CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 USER_ID = os.getenv("LINE_USER_ID")
 GOOGLE_SHEETS_CREDENTIALS = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
+FINMIND_TOKEN = os.getenv("FINMIND_TOKEN")  # ← 請務必設定這個
 
 if not CHANNEL_ACCESS_TOKEN:
     raise RuntimeError("LINE_CHANNEL_ACCESS_TOKEN 未設定")
@@ -27,10 +28,12 @@ if not GOOGLE_SHEETS_CREDENTIALS:
     raise RuntimeError("GOOGLE_SHEETS_CREDENTIALS 未設定")
 if not GOOGLE_SHEET_ID:
     raise RuntimeError("GOOGLE_SHEET_ID 未設定")
+if not FINMIND_TOKEN:
+    raise RuntimeError("FINMIND_TOKEN 未設定，請先註冊並設定 token")
 
 # ======================== 參數設定 ========================
 
-TSMC_TICKER = "2330.TW"
+TSMC_STOCK_ID = "2330"
 HISTORY_DAYS = 365          # 保留一年資料
 SHEET_NAME = "Sheet1"       # Google Sheets 工作表名稱
 
@@ -80,51 +83,66 @@ def send_line_push(message: str):
         print(f"⚠️ LINE 推播錯誤：{e}")
 
 
-def get_tsmc_data() -> Optional[Dict]:
+def get_tsmc_data(max_attempts=3, delay_seconds=5) -> Optional[Dict]:
     """
-    使用 yfinance 取得台積電最新價格與昨收價
-    回傳格式與原版相容
+    使用 FinMind 取得台積電最新價格與昨收價
+    需要設定 FINMIND_TOKEN 環境變數
     """
-    try:
-        ticker = yf.Ticker(TSMC_TICKER)
+    dl = DataLoader()
+    dl.login_by_token(api_token=FINMIND_TOKEN)
 
-        # 取得最新即時報價資訊
-        info = ticker.info
+    for attempt in range(max_attempts):
+        try:
+            # 取得最近幾天的日成交資料（取最新一筆）
+            end_date = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+            start_date = (datetime.now(timezone(timedelta(hours=8))) - timedelta(days=10)).strftime("%Y-%m-%d")
 
-        # 嘗試取得各種可能存在的即時價格欄位
-        current_price = None
-        for key in ['regularMarketPrice', 'currentPrice', 'lastPrice', 'previousClose']:
-            if key in info and info[key] is not None:
-                current_price = float(info[key])
-                break
+            df = dl.taiwan_stock_daily(
+                stock_id=TSMC_STOCK_ID,
+                start_date=start_date,
+                end_date=end_date
+            )
 
-        # 昨收價
-        previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
+            if df.empty:
+                print(f"第 {attempt+1} 次：無資料")
+                time.sleep(delay_seconds)
+                continue
 
-        if current_price is None or previous_close is None:
-            print("⚠️ yfinance 未取得完整價格資訊")
-            return None
+            # 取最新一筆
+            latest = df.iloc[-1]
+            current_price = float(latest['close'])
 
-        # 取得今日日期 (台灣時間)
-        taipei_tz = timezone(timedelta(hours=8))
-        today_dt = datetime.now(timezone.utc).astimezone(taipei_tz)
-        today_str = today_dt.strftime("%Y-%m-%d")
+            # 昨收價：如果有前一天就用前一天，沒有就用當天
+            if len(df) >= 2:
+                yesterday_close = float(df.iloc[-2]['close'])
+            else:
+                yesterday_close = current_price  # 保底
 
-        return {
-            "price": current_price,
-            "yesterday_close": float(previous_close),
-            "date": today_str
-        }
+            # 取得台灣時間
+            taipei_tz = timezone(timedelta(hours=8))
+            today_dt = datetime.now(timezone.utc).astimezone(taipei_tz)
+            today_str = today_dt.strftime("%Y-%m-%d")
 
-    except Exception as e:
-        print(f"⚠️ yfinance 取得資料失敗：{e}")
-        return None
+            print(f"FinMind 取得成功：現價 {current_price}，昨收 {yesterday_close}")
+
+            return {
+                "price": current_price,
+                "yesterday_close": yesterday_close,
+                "date": today_str
+            }
+
+        except Exception as e:
+            print(f"FinMind 第 {attempt+1} 次失敗：{e}")
+            time.sleep(delay_seconds)
+
+    print("FinMind 所有嘗試皆失敗")
+    return None
 
 
 # ==================== Google Sheets 操作 ====================
+# （以下部分與原本相同，省略重複內容）
 
 def load_history_from_sheets(service) -> List[Dict]:
-    """從 Google Sheets 載入歷史資料"""
     if not service:
         return []
 
@@ -155,7 +173,6 @@ def load_history_from_sheets(service) -> List[Dict]:
 
 def save_to_sheets(service, date: str, price: float, ma5: Optional[float],
                    ma20: Optional[float], ma60: Optional[float], timestamp: str) -> bool:
-    """儲存資料到 Google Sheets"""
     if not service:
         return False
 
@@ -186,7 +203,6 @@ def save_to_sheets(service, date: str, price: float, ma5: Optional[float],
 
 
 def cleanup_old_data(service, keep_days: int = 365):
-    """清理超過指定天數的舊資料"""
     if not service:
         return
 
@@ -228,9 +244,9 @@ def cleanup_old_data(service, keep_days: int = 365):
 
 
 # ==================== 技術分析 ====================
+# （以下與原本相同，省略重複）
 
 def calculate_ma(history: List[Dict], days: int) -> Optional[float]:
-    """計算 N 日均線"""
     if len(history) < days:
         return None
     recent_prices = [h['price'] for h in history[-days:]]
@@ -238,7 +254,6 @@ def calculate_ma(history: List[Dict], days: int) -> Optional[float]:
 
 
 def analyze_trend(history: List[Dict], days: int = 3) -> tuple:
-    """分析近 N 日趨勢"""
     if len(history) < days:
         return "資料不足", "📊"
 
@@ -259,10 +274,7 @@ def analyze_trend(history: List[Dict], days: int = 3) -> tuple:
     return "整理中", "📊"
 
 
-# ==================== 進階分析功能 ====================
-
 def get_yearly_stats(history: List[Dict]) -> Dict:
-    """計算年度統計資料"""
     if len(history) < 30:
         return {}
 
@@ -288,7 +300,6 @@ def get_yearly_stats(history: List[Dict]) -> Dict:
 
 
 def get_long_term_trend(history: List[Dict]) -> str:
-    """判斷長期趨勢（30/60/90天）"""
     if len(history) < 90:
         return ""
 
@@ -304,7 +315,7 @@ def get_long_term_trend(history: List[Dict]) -> str:
     if current > ma30 > ma60 > ma90:
         return "📈 長期多頭（30>60>90）"
     elif current < ma30 < ma60 < ma90:
-        return "📉 長期空頭（30<60>90）"
+        return "📉 長期空頭（30<60<90）"
     elif current > ma30 and ma30 > ma60:
         return "💡 轉多訊號（突破中期均線）"
     elif current < ma30 and ma30 < ma60:
@@ -314,8 +325,7 @@ def get_long_term_trend(history: List[Dict]) -> str:
 
 
 def get_smart_suggestion(price: float, history: List[Dict], ma5: Optional[float],
-                        ma20: Optional[float], ma60: Optional[float]) -> List[str]:
-    """智能買賣建議（加強版）"""
+                         ma20: Optional[float], ma60: Optional[float]) -> List[str]:
     suggestions = []
 
     if len(history) < 3:
@@ -338,7 +348,7 @@ def get_smart_suggestion(price: float, history: List[Dict], ma5: Optional[float]
     if long_term:
         suggestions.append(long_term)
 
-    # 以下為原有邏輯（保持不變）
+    # 原有邏輯（保持不變）
     if (ma5 and ma20 and ma60 and
         price > ma5 > ma20 > ma60 and
         trend_desc == "止跌反彈"):
@@ -421,7 +431,7 @@ def main():
 
     stock_data = get_tsmc_data()
     if stock_data is None:
-        send_line_push(f"【台積電監控】\n{now}\n⚠️ 無法取得最新股價資料（可能市場未開盤）")
+        send_line_push(f"【台積電監控】\n{now}\n⚠️ 無法取得最新股價資料（可能市場未開盤或 API 限制）")
         print("⚠️ 無法取得股價資料")
         return
 
@@ -432,19 +442,22 @@ def main():
 
     history = load_history_from_sheets(service)
 
-    # 只在有新價格 且 是新的一天 時才新增資料
     last_date = history[-1].get('date') if history else None
 
     if last_date != today:
-        history.append({'date': today, 'price': price, 'timestamp': now})
-        ma5 = calculate_ma(history, 5)
-        ma20 = calculate_ma(history, 20)
-        ma60 = calculate_ma(history, 60)
+        change_ratio = abs(price - yesterday_close) / yesterday_close if yesterday_close != 0 else 0
 
-        save_to_sheets(service, today, price, ma5, ma20, ma60, now)
-        cleanup_old_data(service, HISTORY_DAYS)
+        if change_ratio < 0.0005:  # 0.05% 以內視為無明顯變動
+            print(f"價格與昨收幾乎相同 ({change_ratio:.6f})，可能是開盤前或資料延遲，暫不新增記錄")
+        else:
+            history.append({'date': today, 'price': price, 'timestamp': now})
+            ma5 = calculate_ma(history, 5)
+            ma20 = calculate_ma(history, 20)
+            ma60 = calculate_ma(history, 60)
+
+            save_to_sheets(service, today, price, ma5, ma20, ma60, now)
+            cleanup_old_data(service, HISTORY_DAYS)
     else:
-        # 同一天，使用歷史最後一筆價格計算均線
         ma5 = calculate_ma(history, 5)
         ma20 = calculate_ma(history, 20)
         ma60 = calculate_ma(history, 60)
@@ -494,6 +507,7 @@ def main():
 
     msg_parts.append("━━━━━━━━━━━━━━")
     msg_parts.append(f"📝 歷史：{len(history)}/{HISTORY_DAYS} 天 (Google Sheets ☁️)")
+    msg_parts.append("※ 資料來源：FinMind")
 
     msg = "\n".join(msg_parts)
     send_line_push(msg)
