@@ -87,22 +87,28 @@ def load_history_from_sheets(service, stock_id=None):
 def save_to_sheets(service, stock_id, stock_name, date, price, ma5, ma20, ma60, timestamp):
     if not service:
         return False
-    try:
-        values = [[stock_id, stock_name, date, price, ma5, ma20, ma60, timestamp]]
-        service.spreadsheets().values().append(
-            spreadsheetId=GOOGLE_SHEET_ID,
-            range=f"{SHEET_NAME}!A2",
-            valueInputOption="USER_ENTERED",
-            body={"values": values}
-        ).execute()
-        write_log(f"{stock_id} 寫入 Sheets 成功：{date} - {price:.2f}")
-        return True
-    except Exception as e:
-        write_log(f"{stock_id} 寫入 Sheets 失敗：{e}")
-        return False
+    while True:
+        try:
+            values = [[stock_id, stock_name, date, price, ma5, ma20, ma60, timestamp]]
+            service.spreadsheets().values().append(
+                spreadsheetId=GOOGLE_SHEET_ID,
+                range=f"{SHEET_NAME}!A2",
+                valueInputOption="USER_ENTERED",
+                body={"values": values}
+            ).execute()
+            write_log(f"{stock_id} 寫入 Sheets 成功：{date} - {price:.2f}")
+            return True
+        except Exception as e:
+            err_str = str(e)
+            if '429' in err_str or 'quota' in err_str.lower():
+                write_log(f"append quota exceeded，sleep 60 秒後重試")
+                time.sleep(60)
+                continue
+            else:
+                write_log(f"{stock_id} 寫入 Sheets 失敗：{e}")
+                return False
 
 def update_row_in_sheets(service, stock_id, date, stock_name, price, ma5, ma20, ma60, timestamp):
-    # 先讀取所有資料，找到要更新的row index
     try:
         result = service.spreadsheets().values().get(
             spreadsheetId=GOOGLE_SHEET_ID,
@@ -111,17 +117,27 @@ def update_row_in_sheets(service, stock_id, date, stock_name, price, ma5, ma20, 
         values = result.get("values", [])
         for idx, row in enumerate(values):
             if len(row) > 2 and row[0] == stock_id and row[2] == date:
-                # 找到要更新的row
                 update_range = f"{SHEET_NAME}!A{idx+2}:H{idx+2}"
                 update_values = [[stock_id, stock_name, date, price, ma5, ma20, ma60, timestamp]]
-                service.spreadsheets().values().update(
-                    spreadsheetId=GOOGLE_SHEET_ID,
-                    range=update_range,
-                    valueInputOption="USER_ENTERED",
-                    body={"values": update_values}
-                ).execute()
-                write_log(f"{stock_id} 覆蓋 Sheets 成功：{date} - {price}")
-                return True
+                while True:
+                    try:
+                        service.spreadsheets().values().update(
+                            spreadsheetId=GOOGLE_SHEET_ID,
+                            range=update_range,
+                            valueInputOption="USER_ENTERED",
+                            body={"values": update_values}
+                        ).execute()
+                        write_log(f"{stock_id} 覆蓋 Sheets 成功：{date} - {price}")
+                        return True
+                    except Exception as e:
+                        err_str = str(e)
+                        if '429' in err_str or 'quota' in err_str.lower():
+                            write_log(f"update quota exceeded，sleep 60 秒後重試")
+                            time.sleep(60)
+                            continue
+                        else:
+                            write_log(f"{stock_id} 更新 Sheets 失敗：{e}")
+                            return False
         # 沒找到就append
         return save_to_sheets(service, stock_id, stock_name, date, price, ma5, ma20, ma60, timestamp)
     except Exception as e:
