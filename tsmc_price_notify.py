@@ -3,6 +3,8 @@
 # 盤後：即時成交價 + 正式收盤價寫入 Sheets
 
 import os
+from dotenv import load_dotenv
+load_dotenv()  # 只會補充本地 .env，優先用系統環境變數
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
@@ -68,9 +70,10 @@ def write_log(msg):
 
 def get_latest_instant_price(dl, stock_id: str):
     """取得單支股票盤中即時成交價"""
+    df = None
     try:
-        df = dl.get_data(dataset="TaiwanStockInstant", data_id=stock_id)
-        # 檢查 df 是否為 DataFrame 並且有 'deal_price' 欄位
+        today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        df = dl.get_data(dataset="TaiwanStockPrice", data_id=stock_id, start_date=today)
         if df is None or df.empty or 'deal_price' not in df.columns:
             msg = f"{stock_id} 即時資料為空或缺少 deal_price 欄位, df={df}"
             write_log(msg)
@@ -80,6 +83,12 @@ def get_latest_instant_price(dl, stock_id: str):
     except Exception as e:
         error_msg = f"{stock_id} 取得即時價失敗：{e}"
         write_log(error_msg)
+        write_log(f"{stock_id} df repr: {repr(df)}")
+        try:
+            write_log(f"{stock_id} df columns: {df.columns if df is not None else 'None'}")
+            write_log(f"{stock_id} df head: {df.head() if df is not None and not df.empty else 'Empty'}")
+        except Exception as log_e:
+            write_log(f"{stock_id} log df error: {log_e}")
         return None
 
 def get_today_close(dl, stock_id: str, date_str: str) -> Optional[float]:
