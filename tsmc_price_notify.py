@@ -123,7 +123,7 @@ def get_tsmc_data(dl) -> Optional[Dict]:
     now = datetime.now(timezone(timedelta(hours=8)))
     today = now.strftime("%Y-%m-%d")
 
-    instant = get_latest_instant_price(dl)
+    instant = get_latest_instant_price(dl, TSMC_STOCK_ID)
     if not instant:
         return None
 
