@@ -1,6 +1,7 @@
 # 多股價格監控 - Google Sheets 永久儲存
 # 盤中：即時成交價
 # 盤後：即時成交價 + 正式收盤價寫入 Sheets
+# 支援多支股票同時監控與推播
 
 import os
 from dotenv import load_dotenv
@@ -251,7 +252,7 @@ def main():
             msg.append(f"今日收盤：{stock['close_price']:.2f} 元")
             save_to_sheets(service, stock_id, stock_name, stock["date"], stock["close_price"], ma5, ma20, ma60, now_str)
 
-        msg.append("※ 資料來源：FinMind")
+        msg.append("※ 資料來源：FinMind（付費版）")
         send_line_push("\n".join(msg))
         write_log(f"{stock_id} LINE 推播內容：\n" + "\n".join(msg))
         write_log(f"{stock_id} 推播完成")
