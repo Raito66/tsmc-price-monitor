@@ -73,24 +73,40 @@ def send_line_push(message: str):
 
 
 def get_latest_minute_price(dl) -> Optional[Dict]:
-    """取得最新分鐘級成交資料（盤中即時，盤後為最後成交）"""
+    """
+    使用 FinMind 官方推薦的 get_data 方式取得最新分鐘級成交價
+    這是目前最穩定的寫法，能取得盤中即時股價（或盤後最後成交價）
+    """
     try:
         today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
-        df = dl.taiwan_stock_minute(
-            stock_id=TSMC_STOCK_ID,
+
+        # 關鍵修正：使用 get_data + dataset="TaiwanStockMinute"
+        df = dl.get_data(
+            dataset="TaiwanStockMinute",
+            data_id=TSMC_STOCK_ID,
             start_date=today,
             end_date=today
         )
+
         if df.empty:
+            print("今日分鐘資料為空（可能尚未開盤、盤後未更新或 API 限制）")
             return None
+
         df = df.sort_values('date')
         latest = df.iloc[-1]
+
+        price = float(latest['close'])
+        time_str = latest['date']  # 格式如 2026-02-09 10:45:00
+
+        print(f"取得分鐘資料成功 - 時間：{time_str}，最新成交價：{price:.2f}")
+
         return {
-            "price": float(latest['close']),
-            "time": latest['date'],
+            "price": price,
+            "time": time_str,
         }
+
     except Exception as e:
-        print(f"取得分鐘價失敗：{e}")
+        print(f"取得分鐘價失敗：{str(e)}")
         return None
 
 
@@ -244,7 +260,7 @@ def calculate_ma(history: List[Dict], days: int) -> Optional[float]:
 
 # 技術分析相關函式（這裡只保留框架，請補上你原本的完整內容）
 def get_smart_suggestion(price: float, history: List[Dict], ma5, ma20, ma60) -> List[str]:
-    suggestions = ["技術分析功能保留中..."]  # 請貼上你原本的完整建議邏輯
+    suggestions = ["技術分析功能保留中..."]  # ← 請貼上你原本的完整建議邏輯
     return suggestions
 
 
@@ -274,7 +290,7 @@ def main():
 
     stock_data = get_tsmc_data(dl)
     if stock_data is None:
-        send_line_push(f"【台積電監控】\n{now_str}\n⚠️ 無法取得股價資料")
+        send_line_push(f"【台積電監控】\n{now_str}\n⚠️ 無法取得股價資料（可能市場未開盤或 API 限制）")
         return
 
     latest_price = stock_data["latest_price"]
