@@ -9,6 +9,8 @@ from typing import Dict, List, Optional
 import pandas as pd
 from FinMind.data import DataLoader
 import requests
+import yfinance as yf
+
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -72,13 +74,13 @@ def write_log(msg):
         f.write(f"{now_str} {msg}\n")
     print(f"{now_str} {msg}")
 
-# ======================== 核心函式 ========================
+# ======================== 價格取得函式 ========================
 def get_latest_available_price(dl, stock_id: str):
-    """ 取得最新可用的價格 """
     tz = timezone(timedelta(hours=8))
     today = datetime.now(tz).strftime("%Y-%m-%d")
+    tw_symbol = f"{stock_id}.TW"
 
-    # 1. 當天分鐘級資料
+    # 1. 當天分鐘級資料（FinMind）
     try:
         df = dl.get_data(dataset="TaiwanStockPrice", data_id=stock_id, start_date=today)
         if df is not None and not df.empty and 'close' in df.columns:
@@ -87,55 +89,75 @@ def get_latest_available_price(dl, stock_id: str):
             if "Time" in df.columns and pd.notna(latest.get("Time", None)):
                 time_str = f"{latest['date']} {latest['Time']}"
             price = float(latest["close"])
-            write_log(f"{stock_id} 取得當天最新分鐘價：{price:.2f} @ {time_str}")
+            write_log(f"{stock_id} 取得當天最新分鐘價（FinMind）：{price:.2f} @ {time_str}")
             return {
                 "price": price,
                 "time": time_str,
-                "source": "today_tick",
-                "is_latest": True
+                "source": "today_tick_finmind",
+                "is_latest": True,
+                "finmind_success": True
             }
     except Exception as e:
-        write_log(f"{stock_id} 抓當天分鐘價失敗：{e}")
+        write_log(f"{stock_id} FinMind 當天分鐘價失敗：{e}")
 
-    # 2. 當天日收盤價
+    # 2. 當天日收盤價（FinMind）
     try:
         df_day = dl.taiwan_stock_daily(stock_id, start_date=today, end_date=today)
         if not df_day.empty:
             price = float(df_day.iloc[0]["close"])
-            write_log(f"{stock_id} 取得當天日收盤價：{price:.2f}")
+            write_log(f"{stock_id} 取得當天日收盤價（FinMind）：{price:.2f}")
             return {
                 "price": price,
                 "time": f"{today} 收盤",
-                "source": "today_daily",
-                "is_latest": True
+                "source": "today_daily_finmind",
+                "is_latest": True,
+                "finmind_success": True
             }
     except Exception as e:
-        write_log(f"{stock_id} 抓當天日收盤價失敗：{e}")
+        write_log(f"{stock_id} FinMind 當天日收盤價失敗：{e}")
 
-    # 3. 往前找最近交易日（最多往前找 10 天）
-    write_log(f"{stock_id} 當天無資料，往前找最近交易日")
+    # 今天完全沒有資料 → 改用 yfinance
+    write_log(f"{stock_id} FinMind 今天完全無資料 → 改用 yfinance 備援")
     try:
-        start_date = (datetime.now(tz) - timedelta(days=10)).strftime("%Y-%m-%d")
-        df_recent = dl.taiwan_stock_daily(stock_id, start_date=start_date, end_date=today)
-        if not df_recent.empty:
-            latest = df_recent.iloc[-1]
-            price = float(latest["close"])
-            date_str = latest["date"]
-            write_log(f"{stock_id} 使用最近交易日收盤價：{price:.2f} ({date_str})")
+        ticker = yf.Ticker(tw_symbol)
+
+        # 嘗試抓今天的分鐘資料
+        hist = ticker.history(period="1d", interval="1m")
+        if not hist.empty:
+            latest = hist.iloc[-1]
+            price = float(latest["Close"])
+            time_str = latest.name.strftime("%Y-%m-%d %H:%M:%S")
+            write_log(f"{stock_id} yfinance 取得最新分鐘價：{price:.2f} @ {time_str}")
             return {
                 "price": price,
-                "time": f"{date_str} （最近交易日）",
-                "source": "previous",
-                "is_latest": False
+                "time": f"{time_str} (yfinance 備援)",
+                "source": "today_yfinance",
+                "is_latest": True,
+                "finmind_success": False
+            }
+
+        # 如果分鐘沒抓到，抓最近 5 天日收盤
+        hist_daily = ticker.history(period="5d")
+        if not hist_daily.empty:
+            latest = hist_daily.iloc[-1]
+            price = float(latest["Close"])
+            date_str = latest.name.strftime("%Y-%m-%d")
+            write_log(f"{stock_id} yfinance 取得最近日收盤價：{price:.2f} ({date_str})")
+            return {
+                "price": price,
+                "time": f"{date_str} 收盤 (yfinance 備援)",
+                "source": "previous_yfinance",
+                "is_latest": False,
+                "finmind_success": False
             }
     except Exception as e:
-        write_log(f"{stock_id} 往前找價格也失敗：{e}")
+        write_log(f"{stock_id} yfinance 備援也失敗：{e}")
 
-    write_log(f"{stock_id} 無法取得任何價格資料")
+    write_log(f"{stock_id} FinMind 與 yfinance 都無法取得任何價格")
     return None
 
 def get_today_close(dl, stock_id: str, date_str: str) -> Optional[float]:
-    """取得指定日期的日收盤價"""
+    """取得指定日期的日收盤價（僅用 FinMind，用於寫入 Sheets）"""
     try:
         df = dl.taiwan_stock_daily(stock_id, start_date=date_str, end_date=date_str)
         if not df.empty:
@@ -154,7 +176,7 @@ def get_stock_data(dl, stock_id: str) -> Optional[Dict]:
     if not instant:
         return None
 
-    # 取得昨天收盤價（用來計算漲跌）
+    # 取得昨天收盤價，用來計算漲跌
     yesterday_close = get_today_close(dl, stock_id, (now - timedelta(days=1)).strftime("%Y-%m-%d"))
     if yesterday_close is None:
         yesterday_close = instant["price"]  # 避免除以零
@@ -167,9 +189,11 @@ def get_stock_data(dl, stock_id: str) -> Optional[Dict]:
         "date": today,
         "is_after_close": is_after_close,
         "source": instant["source"],
-        "is_latest": instant["is_latest"]
+        "is_latest": instant["is_latest"],
+        "finmind_success": instant.get("finmind_success", False)
     }
 
+    # 如果已經盤後，嘗試取得今天正式收盤價
     if is_after_close:
         close_price = get_today_close(dl, stock_id, today)
         if close_price:
@@ -234,7 +258,7 @@ def main():
             write_log(f"{stock_id} 無法取得資料")
             continue
 
-        # 取近 61 天日K 算均線
+        # 取近 61 天日K 算均線（使用 FinMind）
         df = dl.taiwan_stock_daily(
             stock_id,
             start_date=(now - timedelta(days=61)).strftime("%Y-%m-%d"),
@@ -246,7 +270,6 @@ def main():
         ma20 = calculate_ma(closes, 20)
         ma60 = calculate_ma(closes, 60)
 
-        # 先準備好顯示用的字串
         ma5_str = f"{ma5:.2f}" if ma5 is not None else "無資料"
         ma20_str = f"{ma20:.2f}" if ma20 is not None else "無資料"
         ma60_str = f"{ma60:.2f}" if ma60 is not None else "無資料"
@@ -256,16 +279,17 @@ def main():
         change = latest - yesterday_close
         pct = change / yesterday_close * 100 if yesterday_close != 0 else 0
 
-        # 來源註解
+        # 來源註解（強化顯示）
         source = stock["source"]
-        if source == "today_tick":
-            source_note = ""
-        elif source == "today_daily":
-            source_note = "（當天收盤價）"
-        elif source == "previous":
-            source_note = f"（{stock['latest_time']} 最近交易日）"
+        if stock.get("finmind_success", False):
+            if source == "today_tick_finmind":
+                source_note = f"（{stock['latest_time']}）"
+            elif source == "today_daily_finmind":
+                source_note = f"（{stock['latest_time']} 當天收盤）"
+            else:
+                source_note = f"（{stock['latest_time']}）"
         else:
-            source_note = "（資料來源不明）"
+            source_note = f"{stock['latest_time']} （yfinance 備援）"
 
         # 盤中推播建議
         def get_intraday_advice(latest, ma5, ma20, ma60, pct):
@@ -287,7 +311,7 @@ def main():
             else:
                 return "建議暫時不要動作，等明天再看"
 
-        # 盤後行情摘要
+        # 盤後摘要
         def get_after_close_summary(latest, ma5, ma20, ma60, change):
             if ma5 and latest > ma5 and ma20 and latest > ma20:
                 return "建議明天可以買進，今天收盤價比平均價高"
@@ -318,8 +342,14 @@ def main():
 
         # 盤後推播
         if is_today_push and stock["is_after_close"]:
-            close_price = stock.get("close_price", latest)
-            close_note = "（日K正式收盤）" if "close_price" in stock and stock["source"] != "previous" else source_note
+            close_price_for_sheet = get_today_close(dl, stock_id, stock["date"])
+            if close_price_for_sheet is None:
+                write_log(f"{stock_id} 盤後寫入：FinMind 當天日K尚未有資料，跳過寫入")
+                close_price = stock["latest_price"]
+                close_note = f"{stock['latest_time']} （當前最新價）"
+            else:
+                close_price = close_price_for_sheet
+                close_note = f"{stock['latest_time']} （日K正式收盤）"
 
             msg = [
                 f"---",
@@ -334,12 +364,14 @@ def main():
                 f"60日均線：{ma60_str}",
                 f"今日收盤：{close_price:.2f} 元{close_note}",
                 f"行情摘要：{get_after_close_summary(latest, ma5, ma20, ma60, change)}",
-                "※ 資料來源：FinMind"
+                "※ 資料來源：FinMind（若顯示 yfinance 為備援）"
             ]
 
-            # 寫入 Sheets 使用日K收盤價（如果有）
-            save_price = close_price if "close_price" in stock else latest
-            save_to_sheets(service, stock_id, stock_name, stock["date"], save_price, ma5, ma20, ma60, now_str)
+            if close_price_for_sheet is not None:
+                save_to_sheets(
+                    service, stock_id, stock_name, stock["date"],
+                    close_price_for_sheet, ma5, ma20, ma60, now_str
+                )
 
             send_discord_push("\n".join(msg))
             write_log(f"{stock_id} 推播盤後資訊完成")
@@ -358,7 +390,7 @@ def main():
             f"20日均線：{ma20_str}",
             f"60日均線：{ma60_str}",
             f"建議：{get_intraday_advice(latest, ma5, ma20, ma60, pct)}",
-            "※ 資料來源：FinMind"
+            "※ 資料來源：FinMind（若顯示 yfinance 為備援）"
         ]
 
         send_discord_push("\n".join(msg))

@@ -16,3 +16,6 @@ tqdm                       # 進度條顯示，追蹤迴圈或運算進度
 
 # dotenv：用於載入本地 .env 檔案，方便本機開發
 python-dotenv
+
+# 備援股市資料來源（FinMind 失效時用於顯示價格）
+yfinance>=0.2.40
