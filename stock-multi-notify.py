@@ -80,7 +80,6 @@ def get_latest_available_price(dl, stock_id: str):
     today = datetime.now(tz).strftime("%Y-%m-%d")
     tw_symbol = f"{stock_id}.TW"
 
-    # 1. 當天分鐘級資料（FinMind）
     try:
         df = dl.get_data(dataset="TaiwanStockPrice", data_id=stock_id, start_date=today)
         if df is not None and not df.empty and 'close' in df.columns:
@@ -100,7 +99,6 @@ def get_latest_available_price(dl, stock_id: str):
     except Exception as e:
         write_log(f"{stock_id} FinMind 當天分鐘價失敗：{e}")
 
-    # 2. 當天日收盤價（FinMind）
     try:
         df_day = dl.taiwan_stock_daily(stock_id, start_date=today, end_date=today)
         if not df_day.empty:
@@ -116,12 +114,9 @@ def get_latest_available_price(dl, stock_id: str):
     except Exception as e:
         write_log(f"{stock_id} FinMind 當天日收盤價失敗：{e}")
 
-    # 今天完全沒有資料 → 改用 yfinance 備援
     write_log(f"{stock_id} FinMind 今天完全無資料 → 改用 yfinance 備援")
     try:
         ticker = yf.Ticker(tw_symbol)
-
-        # 嘗試抓今天的分鐘資料
         hist = ticker.history(period="1d", interval="1m")
         if not hist.empty:
             latest = hist.iloc[-1]
@@ -136,7 +131,6 @@ def get_latest_available_price(dl, stock_id: str):
                 "finmind_success": False
             }
 
-        # 如果分鐘沒抓到，抓最近 5 天日收盤
         hist_daily = ticker.history(period="5d")
         if not hist_daily.empty:
             latest = hist_daily.iloc[-1]
@@ -224,6 +218,77 @@ def save_to_sheets(service, stock_id, stock_name, date, price, ma5, ma20, ma60, 
         write_log(f"{stock_id} 寫入 Sheets 失敗：{e}")
         return False
 
+# ======================== 盤中建議 - 保守 + 精準 + 數字化版 ========================
+def get_intraday_advice(latest, ma5, ma20, ma60, pct):
+    if not (ma5 and ma20):
+        return "均線資料不夠，先等等看比較好"
+
+    diff_ma5 = (latest - ma5) / ma5 * 100 if ma5 else 0
+    diff_ma20 = (latest - ma20) / ma20 * 100 if ma20 else 0
+
+    # 全部買進條件（非常嚴格）
+    if latest > ma5 and latest > ma20:
+        if diff_ma5 <= 2.8 and 3.0 <= pct <= 6.0:  # 剛突破 + 漲幅強但不過熱
+            return "剛突破均線 + 今天力道很強，建議可以全部買進（但設好停損點）"
+
+        # 過熱 + 漲幅大 → 全部賣出或大賣
+        elif diff_ma5 > 7.5 or (diff_ma5 > 6.0 and pct > 4.5):
+            return "現在明顯過熱 + 漲幅很大，建議全部賣出鎖利，或至少先賣 70%~100%"
+
+        # 漲很多但還沒到極端
+        elif pct > 5.0:
+            return "今天漲很多，建議先賣 50%~80% 鎖住部分利潤，剩下的看明天"
+
+        # 偏貴區
+        elif diff_ma5 > 4.5:
+            return "股價已經漲不少，現在偏貴，建議先觀望，或最多用 10%~20% 的資金試試看"
+
+        # 正常上漲區
+        elif 1.5 <= pct < 3.5:
+            return "今天有往上力道，建議先用 25%~45% 的資金分批買進"
+
+        # 小漲或持平
+        elif abs(pct) < 1.2:
+            if pct > 0:
+                return "小漲站上均線，建議先用 10%~25% 的資金試試看"
+            else:
+                return "站上均線但今天沒力道，建議先觀望，不要急著買"
+
+        # 漲太快但乖離還可接受
+        else:
+            return "漲太快了，建議先不要追，最多用 15%~30% 的資金小量進場"
+
+    # 跌勢判斷
+    elif latest < ma5 and latest < ma20:
+        if pct < -5.0:
+            return "今天跌很多 + 跌破均線，建議全部賣出止損，或至少先賣 70%~100%"
+        elif pct < -2.5:
+            return "跌破均線 + 跌幅明顯，建議先賣 40%~70% 降低風險"
+        else:
+            return "股價在均線下面，建議暫時不要買，等反彈再看"
+
+    # 極端波動
+    elif abs(pct) > 7.0:
+        if pct > 7.0:
+            return "今天漲超兇，建議先賣 60%~90% 鎖住大部分利潤"
+        else:
+            return "今天跌超兇，建議先賣 60%~90% 避險"
+
+    # 兜底
+    else:
+        return "現在情況不明，先觀望比較安全，等明天再說"
+
+# 盤後摘要（保持原版）
+def get_after_close_summary(latest, ma5, ma20, ma60, change):
+    if ma5 and latest > ma5 and ma20 and latest > ma20:
+        return "建議明天可以買進，今天收盤價比平均價高"
+    elif ma5 and latest < ma5 and ma20 and latest < ma20:
+        return "建議明天不要買，今天收盤價比平均價低"
+    elif abs(change) < 1:
+        return "今天沒什麼變化，明天再觀察"
+    else:
+        return "今天價格有變動，明天再看情況決定要不要買"
+
 # ======================== 主程式 ========================
 def main():
     tz = timezone(timedelta(hours=8))
@@ -237,14 +302,12 @@ def main():
     dl = DataLoader()
     dl.login_by_token(FINMIND_TOKEN)
 
-    # 判斷是否可能為交易日
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     df_yest = dl.taiwan_stock_daily("2330", start_date=yesterday, end_date=yesterday)
     if df_yest.empty:
         write_log("昨天無交易資料，今天很可能休市，結束本次執行")
         return
 
-    # 判斷執行時段
     is_yesterday_push = (hour == 13 and 31 <= minute < 59)
     is_today_push = (hour >= 14)
 
@@ -255,7 +318,6 @@ def main():
             write_log(f"{stock_id} 無法取得資料")
             continue
 
-        # 取近 61 天日K 算均線
         df = dl.taiwan_stock_daily(
             stock_id,
             start_date=(now - timedelta(days=61)).strftime("%Y-%m-%d"),
@@ -276,7 +338,6 @@ def main():
         change = latest - yesterday_close
         pct = change / yesterday_close * 100 if yesterday_close != 0 else 0
 
-        # 來源註解
         if stock.get("finmind_success", False):
             if stock["source"] == "today_tick_finmind":
                 source_note = f"（{stock['latest_time']}）"
@@ -290,41 +351,8 @@ def main():
             else:
                 source_note = f"（{stock['latest_time']} 收盤）（yfinance 備援）"
 
-        # 盤中推播建議
-        def get_intraday_advice(latest, ma5, ma20, ma60, pct):
-            if ma5 and ma20 and latest > ma5 and latest > ma20:
-                if abs(pct) < 1:
-                    return "建議現在可以全部買進"
-                elif 1 <= pct < 3:
-                    return "建議分批買進 30% 資金，剩下的等價格下跌再買"
-                elif pct >= 3:
-                    return "建議不要現在買，等價格下跌再買"
-                else:
-                    return "建議現在可以買進"
-            elif ma5 and ma20 and latest < ma5 and latest < ma20:
-                return "建議不要買，暫時不要動作"
-            elif abs(pct) > 5:
-                return "今天價格變化太大，建議不要買也不要賣"
-            elif ma5 and latest > ma5:
-                return "可以小量分批買進 10%~20% 資金"
-            else:
-                return "建議暫時不要動作，等明天再看"
-
-        # 盤後摘要
-        def get_after_close_summary(latest, ma5, ma20, ma60, change):
-            if ma5 and latest > ma5 and ma20 and latest > ma20:
-                return "建議明天可以買進，今天收盤價比平均價高"
-            elif ma5 and latest < ma5 and ma20 and latest < ma20:
-                return "建議明天不要買，今天收盤價比平均價低"
-            elif abs(change) < 1:
-                return "今天沒什麼變化，明天再觀察"
-            else:
-                return "今天價格有變動，明天再看情況決定要不要買"
-
-        # 統一的 footnote
         footnote = "※ 資料來源：FinMind（yfinance 為備援來源）"
 
-        # 只在 13:31~13:59 推播昨日收盤價
         if is_yesterday_push:
             msg = [
                 f"---",
@@ -342,7 +370,6 @@ def main():
             write_log(f"{stock_id} 推播昨日收盤價完成")
             continue
 
-        # 盤後推播
         if is_today_push and stock["is_after_close"]:
             close_price_for_sheet = get_today_close(dl, stock_id, stock["date"])
             if close_price_for_sheet is None:
@@ -379,7 +406,6 @@ def main():
             write_log(f"{stock_id} 推播盤後資訊完成")
             continue
 
-        # 盤中推播（其他時間）
         msg = [
             f"---",
             f"【{stock_id} {stock_name} 盤中監控 {now.strftime('%Y年%m月%d日')}】",
