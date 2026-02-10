@@ -276,7 +276,7 @@ def main():
         change = latest - yesterday_close
         pct = change / yesterday_close * 100 if yesterday_close != 0 else 0
 
-        # 來源註解（已修正，不會有 NameError）
+        # 來源註解
         if stock.get("finmind_success", False):
             if stock["source"] == "today_tick_finmind":
                 source_note = f"（{stock['latest_time']}）"
@@ -285,7 +285,6 @@ def main():
             else:
                 source_note = f"（{stock['latest_time']}）"
         else:
-            # yfinance 備援
             if stock["source"] == "today_yfinance":
                 source_note = f"（{stock['latest_time']}）（yfinance 備援）"
             else:
@@ -321,6 +320,9 @@ def main():
                 return "今天沒什麼變化，明天再觀察"
             else:
                 return "今天價格有變動，明天再看情況決定要不要買"
+
+        # 統一的 footnote
+        footnote = "※ 資料來源：FinMind（yfinance 為備援來源）"
 
         # 只在 13:31~13:59 推播昨日收盤價
         if is_yesterday_push:
@@ -364,7 +366,7 @@ def main():
                 f"60日均線：{ma60_str}",
                 f"今日收盤：{close_price:.2f} 元{close_note}",
                 f"行情摘要：{get_after_close_summary(latest, ma5, ma20, ma60, change)}",
-                "※ 資料來源：FinMind（若顯示 yfinance 為備援）"
+                footnote
             ]
 
             if close_price_for_sheet is not None:
@@ -390,7 +392,7 @@ def main():
             f"20日均線：{ma20_str}",
             f"60日均線：{ma60_str}",
             f"建議：{get_intraday_advice(latest, ma5, ma20, ma60, pct)}",
-            "※ 資料來源：FinMind（若顯示 yfinance 為備援）"
+            footnote
         ]
 
         send_discord_push("\n".join(msg))
