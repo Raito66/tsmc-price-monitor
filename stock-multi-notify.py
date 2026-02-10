@@ -116,7 +116,7 @@ def get_latest_available_price(dl, stock_id: str):
     except Exception as e:
         write_log(f"{stock_id} FinMind 當天日收盤價失敗：{e}")
 
-    # 今天完全沒有資料 → 改用 yfinance
+    # 今天完全沒有資料 → 改用 yfinance 備援
     write_log(f"{stock_id} FinMind 今天完全無資料 → 改用 yfinance 備援")
     try:
         ticker = yf.Ticker(tw_symbol)
@@ -130,7 +130,7 @@ def get_latest_available_price(dl, stock_id: str):
             write_log(f"{stock_id} yfinance 取得最新分鐘價：{price:.2f} @ {time_str}")
             return {
                 "price": price,
-                "time": f"{time_str} (yfinance 備援)",
+                "time": time_str,  # ← 改成純時間
                 "source": "today_yfinance",
                 "is_latest": True,
                 "finmind_success": False
@@ -145,7 +145,7 @@ def get_latest_available_price(dl, stock_id: str):
             write_log(f"{stock_id} yfinance 取得最近日收盤價：{price:.2f} ({date_str})")
             return {
                 "price": price,
-                "time": f"{date_str} 收盤 (yfinance 備援)",
+                "time": date_str,  # ← 改成純日期
                 "source": "previous_yfinance",
                 "is_latest": False,
                 "finmind_success": False
@@ -279,17 +279,20 @@ def main():
         change = latest - yesterday_close
         pct = change / yesterday_close * 100 if yesterday_close != 0 else 0
 
-        # 來源註解（強化顯示）
-        source = stock["source"]
+        # 來源註解（強化顯示） ← 這裡統一處理備援標記
         if stock.get("finmind_success", False):
-            if source == "today_tick_finmind":
+            if stock["source"] == "today_tick_finmind":
                 source_note = f"（{stock['latest_time']}）"
-            elif source == "today_daily_finmind":
+            elif stock["source"] == "today_daily_finmind":
                 source_note = f"（{stock['latest_time']} 當天收盤）"
             else:
                 source_note = f"（{stock['latest_time']}）"
         else:
-            source_note = f"{stock['latest_time']} （yfinance 備援）"
+            # yfinance 備援的情況
+            if stock["source"] == "today_yfinance":
+                source_note = f"（{stock['latest_time']}）（yfinance 備援）"
+            else:
+                source_note = f"（{stock['latest_time']} 收盤）（yfinance 備援）"
 
         # 盤中推播建議
         def get_intraday_advice(latest, ma5, ma20, ma60, pct):
