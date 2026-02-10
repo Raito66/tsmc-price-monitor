@@ -130,7 +130,7 @@ def get_latest_available_price(dl, stock_id: str):
             write_log(f"{stock_id} yfinance 取得最新分鐘價：{price:.2f} @ {time_str}")
             return {
                 "price": price,
-                "time": time_str,  # ← 改成純時間
+                "time": time_str,
                 "source": "today_yfinance",
                 "is_latest": True,
                 "finmind_success": False
@@ -145,7 +145,7 @@ def get_latest_available_price(dl, stock_id: str):
             write_log(f"{stock_id} yfinance 取得最近日收盤價：{price:.2f} ({date_str})")
             return {
                 "price": price,
-                "time": date_str,  # ← 改成純日期
+                "time": date_str,
                 "source": "previous_yfinance",
                 "is_latest": False,
                 "finmind_success": False
@@ -157,7 +157,6 @@ def get_latest_available_price(dl, stock_id: str):
     return None
 
 def get_today_close(dl, stock_id: str, date_str: str) -> Optional[float]:
-    """取得指定日期的日收盤價（僅用 FinMind，用於寫入 Sheets）"""
     try:
         df = dl.taiwan_stock_daily(stock_id, start_date=date_str, end_date=date_str)
         if not df.empty:
@@ -176,10 +175,9 @@ def get_stock_data(dl, stock_id: str) -> Optional[Dict]:
     if not instant:
         return None
 
-    # 取得昨天收盤價，用來計算漲跌
     yesterday_close = get_today_close(dl, stock_id, (now - timedelta(days=1)).strftime("%Y-%m-%d"))
     if yesterday_close is None:
-        yesterday_close = instant["price"]  # 避免除以零
+        yesterday_close = instant["price"]
 
     result = {
         "stock_id": stock_id,
@@ -193,7 +191,6 @@ def get_stock_data(dl, stock_id: str) -> Optional[Dict]:
         "finmind_success": instant.get("finmind_success", False)
     }
 
-    # 如果已經盤後，嘗試取得今天正式收盤價
     if is_after_close:
         close_price = get_today_close(dl, stock_id, today)
         if close_price:
@@ -258,7 +255,7 @@ def main():
             write_log(f"{stock_id} 無法取得資料")
             continue
 
-        # 取近 61 天日K 算均線（使用 FinMind）
+        # 取近 61 天日K 算均線
         df = dl.taiwan_stock_daily(
             stock_id,
             start_date=(now - timedelta(days=61)).strftime("%Y-%m-%d"),
@@ -279,7 +276,7 @@ def main():
         change = latest - yesterday_close
         pct = change / yesterday_close * 100 if yesterday_close != 0 else 0
 
-        # 來源註解（強化顯示） ← 這裡統一處理備援標記
+        # 來源註解（已修正，不會有 NameError）
         if stock.get("finmind_success", False):
             if stock["source"] == "today_tick_finmind":
                 source_note = f"（{stock['latest_time']}）"
@@ -288,7 +285,7 @@ def main():
             else:
                 source_note = f"（{stock['latest_time']}）"
         else:
-            # yfinance 備援的情況
+            # yfinance 備援
             if stock["source"] == "today_yfinance":
                 source_note = f"（{stock['latest_time']}）（yfinance 備援）"
             else:
