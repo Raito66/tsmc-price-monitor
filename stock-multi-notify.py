@@ -54,6 +54,7 @@ def get_sheets_service():
         print(f"⚠️ Google Sheets 連線失敗：{e}")
         return None
 
+
 def send_discord_push(message: str):
     if not DISCORD_WEBHOOK_URL:
         write_log("未設定 DISCORD_WEBHOOK_URL，無法推播 Discord。")
@@ -68,11 +69,47 @@ def send_discord_push(message: str):
     except Exception as e:
         write_log(f"Discord 推播失敗：{e}")
 
+
 def write_log(msg):
     now_str = datetime.now().strftime('%Y年%m月%d日 %H時%M分%S秒')
     with open("error.log", "a", encoding="utf-8") as f:
         f.write(f"{now_str} {msg}\n")
     print(f"{now_str} {msg}")
+
+
+# ======================== 交易日判斷 ========================
+def is_trading_day(dl: DataLoader, check_date: str, is_after_close: bool) -> bool:
+    """
+    判斷指定日期是否為台股交易日
+    - 盤後：優先檢查當天是否有日K資料
+    - 盤中：檢查昨天是否有交易資料（用來推估今天是否可能開盤）
+    """
+    symbol_for_check = "2330"  # 使用台積電作為代表股票
+
+    try:
+        if is_after_close:
+            # 盤後：檢查今天是否有日K資料
+            df = dl.taiwan_stock_daily(symbol_for_check, start_date=check_date, end_date=check_date)
+            if not df.empty:
+                write_log(f"盤後檢查：{check_date} 有日K資料，視為交易日")
+                return True
+            else:
+                write_log(f"盤後檢查：{check_date} 無日K資料，視為非交易日")
+                return False
+        else:
+            # 盤中：檢查昨天是否有資料
+            yesterday = (datetime.strptime(check_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            df = dl.taiwan_stock_daily(symbol_for_check, start_date=yesterday, end_date=yesterday)
+            if not df.empty:
+                write_log(f"盤中檢查：{yesterday} 有交易資料，今天很可能為交易日")
+                return True
+            else:
+                write_log(f"盤中檢查：{yesterday} 無交易資料，今天很可能休市")
+                return False
+    except Exception as e:
+        write_log(f"交易日檢查發生錯誤：{e}，預設為非交易日")
+        return False
+
 
 # ======================== 價格取得函式 ========================
 def get_latest_available_price(dl, stock_id: str):
@@ -150,6 +187,7 @@ def get_latest_available_price(dl, stock_id: str):
     write_log(f"{stock_id} FinMind 與 yfinance 都無法取得任何價格")
     return None
 
+
 def get_today_close(dl, stock_id: str, date_str: str) -> Optional[float]:
     try:
         df = dl.taiwan_stock_daily(stock_id, start_date=date_str, end_date=date_str)
@@ -159,6 +197,7 @@ def get_today_close(dl, stock_id: str, date_str: str) -> Optional[float]:
     except Exception as e:
         write_log(f"{stock_id} 取得 {date_str} 收盤價失敗：{e}")
         return None
+
 
 def get_stock_data(dl, stock_id: str) -> Optional[Dict]:
     now = datetime.now(timezone(timedelta(hours=8)))
@@ -195,10 +234,12 @@ def get_stock_data(dl, stock_id: str) -> Optional[Dict]:
 
     return result
 
+
 def calculate_ma(prices, window):
     if len(prices) < window:
         return None
     return pd.Series(prices).rolling(window).mean().iloc[-1]
+
 
 # ======================== Google Sheets ========================
 def save_to_sheets(service, stock_id, stock_name, date, price, ma5, ma20, ma60, timestamp):
@@ -218,7 +259,8 @@ def save_to_sheets(service, stock_id, stock_name, date, price, ma5, ma20, ma60, 
         write_log(f"{stock_id} 寫入 Sheets 失敗：{e}")
         return False
 
-# ======================== 盤中建議 - 保守 + 精準 + 數字化版 ========================
+
+# ======================== 盤中建議 ========================
 def get_intraday_advice(latest, ma5, ma20, ma60, pct):
     if not (ma5 and ma20):
         return "均線資料不夠，先等等看比較好"
@@ -226,39 +268,25 @@ def get_intraday_advice(latest, ma5, ma20, ma60, pct):
     diff_ma5 = (latest - ma5) / ma5 * 100 if ma5 else 0
     diff_ma20 = (latest - ma20) / ma20 * 100 if ma20 else 0
 
-    # 全部買進條件（非常嚴格）
     if latest > ma5 and latest > ma20:
-        if diff_ma5 <= 2.8 and 3.0 <= pct <= 6.0:  # 剛突破 + 漲幅強但不過熱
+        if diff_ma5 <= 2.8 and 3.0 <= pct <= 6.0:
             return "剛突破均線 + 今天力道很強，建議可以全部買進（但設好停損點）"
-
-        # 過熱 + 漲幅大 → 全部賣出或大賣
         elif diff_ma5 > 7.5 or (diff_ma5 > 6.0 and pct > 4.5):
             return "現在明顯過熱 + 漲幅很大，建議全部賣出鎖利，或至少先賣 70%~100%"
-
-        # 漲很多但還沒到極端
         elif pct > 5.0:
             return "今天漲很多，建議先賣 50%~80% 鎖住部分利潤，剩下的看明天"
-
-        # 偏貴區
         elif diff_ma5 > 4.5:
             return "股價已經漲不少，現在偏貴，建議先觀望，或最多用 10%~20% 的資金試試看"
-
-        # 正常上漲區
         elif 1.5 <= pct < 3.5:
             return "今天有往上力道，建議先用 25%~45% 的資金分批買進"
-
-        # 小漲或持平
         elif abs(pct) < 1.2:
             if pct > 0:
                 return "小漲站上均線，建議先用 10%~25% 的資金試試看"
             else:
                 return "站上均線但今天沒力道，建議先觀望，不要急著買"
-
-        # 漲太快但乖離還可接受
         else:
             return "漲太快了，建議先不要追，最多用 15%~30% 的資金小量進場"
 
-    # 跌勢判斷
     elif latest < ma5 and latest < ma20:
         if pct < -5.0:
             return "今天跌很多 + 跌破均線，建議全部賣出止損，或至少先賣 70%~100%"
@@ -267,18 +295,16 @@ def get_intraday_advice(latest, ma5, ma20, ma60, pct):
         else:
             return "股價在均線下面，建議暫時不要買，等反彈再看"
 
-    # 極端波動
     elif abs(pct) > 7.0:
         if pct > 7.0:
             return "今天漲超兇，建議先賣 60%~90% 鎖住大部分利潤"
         else:
             return "今天跌超兇，建議先賣 60%~90% 避險"
 
-    # 兜底
     else:
         return "現在情況不明，先觀望比較安全，等明天再說"
 
-# 盤後摘要（保持原版）
+
 def get_after_close_summary(latest, ma5, ma20, ma60, change):
     if ma5 and latest > ma5 and ma20 and latest > ma20:
         return "建議明天可以買進，今天收盤價比平均價高"
@@ -289,6 +315,7 @@ def get_after_close_summary(latest, ma5, ma20, ma60, change):
     else:
         return "今天價格有變動，明天再看情況決定要不要買"
 
+
 # ======================== 主程式 ========================
 def main():
     tz = timezone(timedelta(hours=8))
@@ -296,18 +323,28 @@ def main():
     now_str = now.strftime("%Y年%m月%d日 %H時%M分%S秒")
     hour = now.hour
     minute = now.minute
+    today_str = now.strftime("%Y-%m-%d")
+
     write_log(f"🕐 台灣時間：{now_str}")
 
     service = get_sheets_service()
     dl = DataLoader()
-    dl.login_by_token(FINMIND_TOKEN)
-
-    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    df_yest = dl.taiwan_stock_daily("2330", start_date=yesterday, end_date=yesterday)
-    if df_yest.empty:
-        write_log("昨天無交易資料，今天很可能休市，結束本次執行")
+    try:
+        dl.login_by_token(FINMIND_TOKEN)
+    except Exception as e:
+        write_log(f"FinMind 登入失敗：{e}")
         return
 
+    # ==================== 交易日檢查 ====================
+    is_after_close = hour > 13 or (hour == 13 and minute >= 30)
+
+    if not is_trading_day(dl, today_str, is_after_close):
+        write_log(f"今天 {today_str} 判斷為非交易日，結束本次執行")
+        return
+
+    write_log("通過交易日檢查，開始處理股票資料...")
+
+    # ==================== 原有推播時間判斷 ====================
     is_yesterday_push = (hour == 13 and 31 <= minute < 59)
     is_today_push = (hour >= 14)
 
@@ -315,9 +352,10 @@ def main():
         stock_name = STOCK_NAME_MAP.get(stock_id, stock_id)
         stock = get_stock_data(dl, stock_id)
         if not stock:
-            write_log(f"{stock_id} 無法取得資料")
+            write_log(f"{stock_id} 無法取得資料，跳過")
             continue
 
+        # 取得近 61 天收盤價計算均線
         df = dl.taiwan_stock_daily(
             stock_id,
             start_date=(now - timedelta(days=61)).strftime("%Y-%m-%d"),
@@ -338,6 +376,7 @@ def main():
         change = latest - yesterday_close
         pct = change / yesterday_close * 100 if yesterday_close != 0 else 0
 
+        # 來源註記
         if stock.get("finmind_success", False):
             if stock["source"] == "today_tick_finmind":
                 source_note = f"（{stock['latest_time']}）"
@@ -406,6 +445,7 @@ def main():
             write_log(f"{stock_id} 推播盤後資訊完成")
             continue
 
+        # 盤中推播
         msg = [
             f"---",
             f"【{stock_id} {stock_name} 盤中監控 {now.strftime('%Y年%m月%d日')}】",
@@ -423,6 +463,7 @@ def main():
 
         send_discord_push("\n".join(msg))
         write_log(f"{stock_id} 盤中推播完成")
+
 
 if __name__ == "__main__":
     main()
