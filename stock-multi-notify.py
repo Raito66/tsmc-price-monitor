@@ -392,8 +392,15 @@ def main():
 
         footnote = "※ 資料來源：FinMind（yfinance 為備援來源）"
 
+        # 共用明顯分隔標頭（方式1）
+        header = [
+            "═══════════════════════════════════════════════",
+            f"🆕 新推播 {now_str} 🆕",
+            "═══════════════════════════════════════════════",
+        ]
+
         if is_yesterday_push:
-            msg = [
+            msg = header + [
                 f"---",
                 f"【{stock_id} {stock_name} 昨日收盤價 {now.strftime('%Y年%m月%d日')}】",
                 f"時間：{now_str}",
@@ -419,7 +426,7 @@ def main():
                 close_price = close_price_for_sheet
                 close_note = f"{stock['latest_time']} （日K正式收盤）"
 
-            msg = [
+            msg = header + [
                 f"---",
                 f"【{stock_id} {stock_name} 價格監控 {now.strftime('%Y年%m月%d日')}】",
                 f"時間：{now_str}",
@@ -446,7 +453,7 @@ def main():
             continue
 
         # 盤中推播
-        msg = [
+        msg = header + [
             f"---",
             f"【{stock_id} {stock_name} 盤中監控 {now.strftime('%Y年%m月%d日')}】",
             f"時間：{now_str}",
