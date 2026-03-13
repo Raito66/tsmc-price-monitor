@@ -36,7 +36,7 @@ SHEET_NAME = "Sheet1"
 CONFIG_SHEET_NAME = "Config"
 
 # 關鍵參數：Render 512MiB 安全設定
-BATCH_DAYS = 20           # 每次只處理最近 20 天（記憶體最安全）
+BATCH_DAYS = 90           # 90天≈63交易日，足以計算MA60
 SLEEP_BETWEEN_STOCKS = 120  # 每支股票處理完休息 120 秒
 SLEEP_BETWEEN_WRITES = 8    # 每寫 8 筆休息一次（防 Google API 限流）
 
@@ -221,7 +221,11 @@ def fill_missing_history(service, dl, stock_list, stock_name_map):
         start_date = (now - timedelta(days=BATCH_DAYS)).strftime("%Y-%m-%d")
         write_log(f"{stock_id} 下載範圍：{start_date} ~ {end_date}")
 
-        df = dl.taiwan_stock_daily(stock_id, start_date=start_date, end_date=end_date)
+        try:
+            df = dl.taiwan_stock_daily(stock_id, start_date=start_date, end_date=end_date)
+        except Exception as e:
+            write_log(f"{stock_id} FinMind 取得歷史資料失敗：{e}，跳過")
+            continue
 
         if df.empty:
             write_log(f"{stock_id} 最近 {BATCH_DAYS} 天無資料，跳過")
