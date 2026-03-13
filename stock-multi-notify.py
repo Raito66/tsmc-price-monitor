@@ -28,6 +28,7 @@ if not all([GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEET_ID, FINMIND_TOKEN]):
 STOCK_LIST = ["2330", "6770", "3481", "2337", "2344", "2409", "2367", "3374", "3324", "00642U", "0050", "2231"]
 HISTORY_DAYS = 365
 SHEET_NAME = "Sheet1"
+TWO_STOCKS = {"3374", "3324"}  # 上櫃股，yfinance 用 .TWO
 
 STOCK_NAME_MAP = {
     "2330": "台積電",
@@ -130,7 +131,6 @@ def is_trading_day(dl: DataLoader, check_date: str, is_after_close: bool) -> boo
 def get_latest_available_price(dl, stock_id: str):
     tz = timezone(timedelta(hours=8))
     today = datetime.now(tz).strftime("%Y-%m-%d")
-    TWO_STOCKS = {"3374", "3324"}
     tw_symbol = f"{stock_id}.{'TWO' if stock_id in TWO_STOCKS else 'TW'}"
 
     try:
@@ -411,7 +411,7 @@ def main():
     is_yesterday_push = (hour == 13 and 31 <= minute < 59)
     is_today_push = (hour >= 14)
 
-    success = True  # 用來判斷是否完整執行 7 支
+    success = True  # 用來判斷是否完整執行所有股票
 
     for stock_id in STOCK_LIST:
         stock_name = STOCK_NAME_MAP.get(stock_id, stock_id)
