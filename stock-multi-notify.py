@@ -108,8 +108,17 @@ def is_trading_day(dl: DataLoader, check_date: str, is_after_close: bool) -> boo
                 write_log(f"盤中檢查：{yesterday} 無交易資料，今天很可能休市")
                 return False
     except Exception as e:
-        write_log(f"交易日檢查發生錯誤：{e}，預設為非交易日")
-        return False
+        write_log(f"交易日檢查 FinMind 失敗：{e}，改用 yfinance 確認")
+        try:
+            ticker = yf.Ticker("2330.TW")
+            hist = ticker.history(period="2d")
+            if not hist.empty:
+                write_log("yfinance 確認有資料，視為交易日")
+                return True
+        except Exception as e2:
+            write_log(f"yfinance 也失敗：{e2}")
+        write_log("無法確認交易日，預設為交易日（避免漏跑）")
+        return True
 
 
 # ======================== 價格取得函式 ========================
@@ -153,37 +162,43 @@ def get_latest_available_price(dl, stock_id: str):
         write_log(f"{stock_id} FinMind 當天日收盤價失敗：{e}")
 
     write_log(f"{stock_id} FinMind 今天完全無資料 → 改用 yfinance 備援")
-    try:
-        ticker = yf.Ticker(tw_symbol)
-        hist = ticker.history(period="1d", interval="1m")
-        if not hist.empty:
-            latest = hist.iloc[-1]
-            price = float(latest["Close"])
-            time_str = latest.name.strftime("%Y-%m-%d %H:%M:%S")
-            write_log(f"{stock_id} yfinance 取得最新分鐘價：{price:.2f} @ {time_str}")
-            return {
-                "price": price,
-                "time": time_str,
-                "source": "today_yfinance",
-                "is_latest": True,
-                "finmind_success": False
-            }
+    for attempt in range(3):
+        try:
+            ticker = yf.Ticker(tw_symbol)
+            hist = ticker.history(period="1d", interval="1m")
+            if not hist.empty:
+                latest = hist.iloc[-1]
+                price = float(latest["Close"])
+                time_str = latest.name.strftime("%Y-%m-%d %H:%M:%S")
+                write_log(f"{stock_id} yfinance 取得最新分鐘價：{price:.2f} @ {time_str}")
+                return {
+                    "price": price,
+                    "time": time_str,
+                    "source": "today_yfinance",
+                    "is_latest": True,
+                    "finmind_success": False
+                }
 
-        hist_daily = ticker.history(period="5d")
-        if not hist_daily.empty:
-            latest = hist_daily.iloc[-1]
-            price = float(latest["Close"])
-            date_str = latest.name.strftime("%Y-%m-%d")
-            write_log(f"{stock_id} yfinance 取得最近日收盤價：{price:.2f} ({date_str})")
-            return {
-                "price": price,
-                "time": date_str,
-                "source": "previous_yfinance",
-                "is_latest": False,
-                "finmind_success": False
-            }
-    except Exception as e:
-        write_log(f"{stock_id} yfinance 備援也失敗：{e}")
+            hist_daily = ticker.history(period="5d")
+            if not hist_daily.empty:
+                latest = hist_daily.iloc[-1]
+                price = float(latest["Close"])
+                date_str = latest.name.strftime("%Y-%m-%d")
+                write_log(f"{stock_id} yfinance 取得最近日收盤價：{price:.2f} ({date_str})")
+                return {
+                    "price": price,
+                    "time": date_str,
+                    "source": "previous_yfinance",
+                    "is_latest": False,
+                    "finmind_success": False
+                }
+            break  # 無例外但也無資料，不用重試
+        except Exception as e:
+            if attempt < 2:
+                write_log(f"{stock_id} yfinance rate limit，等 3 秒後重試（第 {attempt + 1} 次）")
+                time.sleep(3)
+            else:
+                write_log(f"{stock_id} yfinance 備援也失敗：{e}")
 
     write_log(f"{stock_id} FinMind 與 yfinance 都無法取得任何價格")
     return None
