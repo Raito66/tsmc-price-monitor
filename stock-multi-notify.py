@@ -424,6 +424,11 @@ def main():
 
     write_log(f"🕐 台灣時間：{now_str}")
 
+    # 台灣時間 09:00 前為盤前，略過本次執行
+    if hour < 9:
+        write_log("盤前時段（09:00 前），略過本次執行")
+        return
+
     service = get_sheets_service()
     if not service:
         write_log("無法連線 Google Sheets，結束執行")
