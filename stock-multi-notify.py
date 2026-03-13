@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -28,7 +29,7 @@ if not all([GOOGLE_SHEETS_CREDENTIALS, GOOGLE_SHEET_ID, FINMIND_TOKEN]):
 STOCK_LIST = ["2330", "6770", "3481", "2337", "2344", "2409", "2367", "3374", "3324", "00642U", "0050", "2231"]
 HISTORY_DAYS = 365
 SHEET_NAME = "Sheet1"
-TWO_STOCKS = {"3374", "3324"}  # 上櫃股，yfinance 用 .TWO
+CONFIG_SHEET_NAME = "Config"  # Google Sheets 股票清單分頁名稱
 
 STOCK_NAME_MAP = {
     "2330": "台積電",
@@ -60,6 +61,89 @@ def get_sheets_service():
     except Exception as e:
         print(f"⚠️ Google Sheets 連線失敗：{e}")
         return None
+
+
+def load_stock_list_from_sheets(service):
+    """從 Config 分頁讀取股票清單，含格式驗證。失敗時回傳 None 使用預設清單。"""
+    if not service:
+        return None, None
+    try:
+        result = service.spreadsheets().values().get(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range=f"{CONFIG_SHEET_NAME}!A2:B"
+        ).execute()
+        rows = result.get("values", [])
+        if not rows:
+            write_log("Config 分頁無資料，使用預設清單")
+            return None, None
+
+        stock_list = []
+        stock_name_map = {}
+        invalid = []
+
+        for row in rows:
+            if not row or not str(row[0]).strip():
+                continue
+            stock_id = str(row[0]).strip().upper()
+            stock_name = str(row[1]).strip() if len(row) > 1 and row[1] else stock_id
+
+            if not re.match(r'^[0-9]{4,6}[A-Z]?$', stock_id):
+                invalid.append(stock_id)
+                write_log(f"⚠️ 代號格式錯誤，跳過：{stock_id}")
+                continue
+
+            stock_list.append(stock_id)
+            stock_name_map[stock_id] = stock_name
+
+        if invalid:
+            send_discord_push(
+                f"⚠️ **Config 分頁有 {len(invalid)} 筆代號格式錯誤，已跳過**\n"
+                f"錯誤代號：{', '.join(invalid)}\n"
+                f"格式說明：4～6 碼數字，可接一個英文字母（例：2330、00642U）"
+            )
+
+        write_log(f"從 Config 分頁載入 {len(stock_list)} 支股票：{stock_list}")
+        return stock_list, stock_name_map
+    except Exception as e:
+        write_log(f"讀取 Config 分頁失敗：{e}，使用預設清單")
+        return None, None
+
+
+def try_yfinance(stock_id: str, suffix: str):
+    """用指定後綴向 yfinance 取得價格，含 rate limit retry。"""
+    tw_symbol = f"{stock_id}.{suffix}"
+    for attempt in range(3):
+        try:
+            ticker = yf.Ticker(tw_symbol)
+            hist = ticker.history(period="1d", interval="1m")
+            if not hist.empty:
+                latest = hist.iloc[-1]
+                price = float(latest["Close"])
+                time_str = latest.name.strftime("%Y-%m-%d %H:%M:%S")
+                write_log(f"{stock_id} yfinance 取得最新分鐘價（.{suffix}）：{price:.2f} @ {time_str}")
+                return {"price": price, "time": time_str, "source": "today_yfinance", "is_latest": True, "finmind_success": False}
+
+            hist_daily = ticker.history(period="5d")
+            if not hist_daily.empty:
+                latest = hist_daily.iloc[-1]
+                price = float(latest["Close"])
+                date_str = latest.name.strftime("%Y-%m-%d")
+                write_log(f"{stock_id} yfinance 取得最近日收盤價（.{suffix}）：{price:.2f} ({date_str})")
+                return {"price": price, "time": date_str, "source": "previous_yfinance", "is_latest": False, "finmind_success": False}
+
+            return None  # 無資料，換後綴試試
+        except Exception as e:
+            if "Too Many Requests" in str(e) or "Rate limited" in str(e):
+                if attempt < 2:
+                    write_log(f"{stock_id} yfinance rate limit（.{suffix}），等 3 秒後重試（第 {attempt + 1} 次）")
+                    time.sleep(3)
+                else:
+                    write_log(f"{stock_id} yfinance 備援失敗（.{suffix}）：{e}")
+                    return None
+            else:
+                write_log(f"{stock_id} yfinance 異常（.{suffix}）：{e}")
+                return None
+    return None
 
 
 def send_discord_push(message: str):
@@ -131,8 +215,6 @@ def is_trading_day(dl: DataLoader, check_date: str, is_after_close: bool) -> boo
 def get_latest_available_price(dl, stock_id: str):
     tz = timezone(timedelta(hours=8))
     today = datetime.now(tz).strftime("%Y-%m-%d")
-    tw_symbol = f"{stock_id}.{'TWO' if stock_id in TWO_STOCKS else 'TW'}"
-
     try:
         df = dl.get_data(dataset="TaiwanStockPrice", data_id=stock_id, start_date=today)
         if df is not None and not df.empty and 'close' in df.columns:
@@ -167,44 +249,11 @@ def get_latest_available_price(dl, stock_id: str):
     except Exception as e:
         write_log(f"{stock_id} FinMind 當天日收盤價失敗：{e}")
 
-    write_log(f"{stock_id} FinMind 今天完全無資料 → 改用 yfinance 備援")
-    for attempt in range(3):
-        try:
-            ticker = yf.Ticker(tw_symbol)
-            hist = ticker.history(period="1d", interval="1m")
-            if not hist.empty:
-                latest = hist.iloc[-1]
-                price = float(latest["Close"])
-                time_str = latest.name.strftime("%Y-%m-%d %H:%M:%S")
-                write_log(f"{stock_id} yfinance 取得最新分鐘價：{price:.2f} @ {time_str}")
-                return {
-                    "price": price,
-                    "time": time_str,
-                    "source": "today_yfinance",
-                    "is_latest": True,
-                    "finmind_success": False
-                }
-
-            hist_daily = ticker.history(period="5d")
-            if not hist_daily.empty:
-                latest = hist_daily.iloc[-1]
-                price = float(latest["Close"])
-                date_str = latest.name.strftime("%Y-%m-%d")
-                write_log(f"{stock_id} yfinance 取得最近日收盤價：{price:.2f} ({date_str})")
-                return {
-                    "price": price,
-                    "time": date_str,
-                    "source": "previous_yfinance",
-                    "is_latest": False,
-                    "finmind_success": False
-                }
-            break  # 無例外但也無資料，不用重試
-        except Exception as e:
-            if attempt < 2:
-                write_log(f"{stock_id} yfinance rate limit，等 3 秒後重試（第 {attempt + 1} 次）")
-                time.sleep(3)
-            else:
-                write_log(f"{stock_id} yfinance 備援也失敗：{e}")
+    write_log(f"{stock_id} FinMind 今天完全無資料 → 改用 yfinance 備援（自動偵測 .TW / .TWO）")
+    for suffix in ["TW", "TWO"]:
+        result = try_yfinance(stock_id, suffix)
+        if result:
+            return result
 
     write_log(f"{stock_id} FinMind 與 yfinance 都無法取得任何價格")
     return None
@@ -371,6 +420,11 @@ def main():
 
     write_log("通過交易日檢查，開始處理股票資料...")
 
+    # ──────────────── 從 Config 分頁讀取股票清單 ────────────────
+    sheets_stock_list, sheets_stock_name_map = load_stock_list_from_sheets(service)
+    active_stock_list = sheets_stock_list if sheets_stock_list else STOCK_LIST
+    active_stock_name_map = sheets_stock_name_map if sheets_stock_name_map else STOCK_NAME_MAP
+
     # ──────────────── 使用 Google Sheets 記錄當天推播批次計數 ────────────────
     count_range = f"{SHEET_NAME}!J1:K1"  # J1: 日期, K1: 計數
 
@@ -413,12 +467,16 @@ def main():
 
     success = True  # 用來判斷是否完整執行所有股票
 
-    for stock_id in STOCK_LIST:
-        stock_name = STOCK_NAME_MAP.get(stock_id, stock_id)
+    for stock_id in active_stock_list:
+        stock_name = active_stock_name_map.get(stock_id, stock_id)
         stock = get_stock_data(dl, stock_id)
         if not stock:
             write_log(f"{stock_id} 無法取得資料，跳過")
             success = False
+            send_discord_push(
+                f"⚠️ **{stock_id} {stock_name}** 無法取得資料，本次已跳過\n"
+                f"可能原因：代號錯誤 / 已下市 / 暫時性 API 問題"
+            )
             continue
 
         # 取得近 61 天收盤價計算均線
@@ -554,7 +612,7 @@ def main():
         except Exception as e:
             write_log(f"更新 Sheets 計數失敗：{e}")
     else:
-        write_log(f"本次推播未完整執行 {len(STOCK_LIST)} 支股票，不更新計數")
+        write_log(f"本次推播未完整執行 {len(active_stock_list)} 支股票，不更新計數")
 
 
 if __name__ == "__main__":
