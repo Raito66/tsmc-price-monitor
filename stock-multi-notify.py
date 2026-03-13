@@ -491,6 +491,7 @@ def main():
     is_today_push = (hour >= 14)
 
     success = True  # 用來判斷是否完整執行所有股票
+    holiday_skipped = 0  # 記錄因今日無即時資料（國定假日）而跳過的股票數
 
     for stock_id in active_stock_list:
         stock_name = active_stock_name_map.get(stock_id, stock_id)
@@ -607,7 +608,13 @@ def main():
             time.sleep(1.0)
             continue
 
-        # 盤中推播
+        # 盤中推播 — 若今日無即時資料（國定假日），略過避免推出舊收盤
+        if not stock["is_latest"]:
+            write_log(f"{stock_id} 今日無即時資料（可能為國定假日），略過盤中推播")
+            holiday_skipped += 1
+            success = False
+            continue
+
         msg = header + [
             f"---",
             f"【{stock_id} {stock_name} 盤中監控 {now.strftime('%Y年%m月%d日')}】",
@@ -626,6 +633,12 @@ def main():
         send_discord_push("\n".join(msg))
         write_log(f"{stock_id} 盤中推播完成")
         time.sleep(1.0)  # 個股間隔，避免太密集
+
+    # ──────────────── 國定假日：所有股票盤中均無即時資料 ────────────────
+    if not is_yesterday_push and not is_today_push and holiday_skipped == len(active_stock_list):
+        send_discord_push(
+            "📢 今日所有股票均無即時交易資料（可能為國定假日），本次略過盤中推播"
+        )
 
     # ──────────────── 只有完整執行才更新計數到 Sheets ────────────────
     if success:
