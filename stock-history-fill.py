@@ -81,6 +81,29 @@ def get_sheet_id(service, sheet_name):
     return None
 
 
+def reset_sheet_filter(service):
+    sheet_id = get_sheet_id(service, SHEET_NAME)
+    if sheet_id is None:
+        write_log("⚠️ 無法取得 Sheet1 ID，跳過 filter 重設")
+        return
+    try:
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            body={"requests": [
+                {"clearBasicFilter": {"sheetId": sheet_id}},
+                {"setBasicFilter": {"filter": {"range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 0,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 8
+                }}}}
+            ]}
+        ).execute()
+        write_log("✅ Sheet1 篩選器重設完成")
+    except Exception as e:
+        write_log(f"⚠️ 篩選器重設失敗：{e}")
+
+
 def apply_sheet_formatting(service):
     """套用 Sheet1 欄位格式：文字靠左（A、B、C、H）、數字靠右（D、E、F、G）"""
     sheet_id = get_sheet_id(service, SHEET_NAME)
@@ -356,6 +379,7 @@ def main():
 
     fill_missing_history(service, dl, active_stock_list, active_stock_name_map)
     apply_sheet_formatting(service)
+    reset_sheet_filter(service)
 
     write_log("=== 補齊流程結束 ===")
 
