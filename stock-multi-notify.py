@@ -269,10 +269,21 @@ def is_trading_day(dl: DataLoader, check_date: str, is_after_close: bool) -> boo
         write_log(f"交易日檢查 FinMind 失敗：{e}，改用 yfinance 確認")
         try:
             ticker = yf.Ticker("2330.TW")
-            hist = ticker.history(period="2d")
-            if not hist.empty:
-                write_log("yfinance 確認有資料，視為交易日")
+            # 先查今日 1 分鐘資料：有資料 → 今天確實有開盤
+            hist_1m = ticker.history(period="1d", interval="1m")
+            if not hist_1m.empty:
+                write_log("yfinance 1m 資料確認今日有交易，視為交易日")
                 return True
+            # 再查日K，比對最新日期是否為今天
+            hist_daily = ticker.history(period="5d")
+            if not hist_daily.empty:
+                latest_date = hist_daily.index[-1].strftime("%Y-%m-%d")
+                if latest_date == check_date:
+                    write_log(f"yfinance 日K確認今日 {check_date} 有收盤資料，視為交易日")
+                    return True
+                else:
+                    write_log(f"yfinance 日K最新為 {latest_date}，今日 {check_date} 無資料，視為非交易日")
+                    return False
         except Exception as e2:
             write_log(f"yfinance 也失敗：{e2}")
         write_log("無法確認交易日，預設為交易日（避免漏跑）")
