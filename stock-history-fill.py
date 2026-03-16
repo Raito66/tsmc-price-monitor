@@ -208,7 +208,7 @@ def update_row_in_sheets(service, stock_id, date, stock_name, price, ma5, ma20, 
                 service.spreadsheets().values().update(
                     spreadsheetId=GOOGLE_SHEET_ID,
                     range=update_range,
-                    valueInputOption="USER_ENTERED",
+                    valueInputOption="RAW",
                     body={"values": update_values}
                 ).execute()
                 write_log(f"{stock_id} 覆蓋 Sheets 成功：{date} - {price if price else 'None'}")
@@ -218,7 +218,7 @@ def update_row_in_sheets(service, stock_id, date, stock_name, price, ma5, ma20, 
         service.spreadsheets().values().append(
             spreadsheetId=GOOGLE_SHEET_ID,
             range=f"{SHEET_NAME}!A2",
-            valueInputOption="USER_ENTERED",
+            valueInputOption="RAW",
             body={"values": values}
         ).execute()
         write_log(f"{stock_id} 新增 Sheets 成功：{date} - {price if price else 'None'}")
@@ -257,7 +257,7 @@ def trim_history_to_limit(service, stock_id, limit=500):
             service.spreadsheets().values().update(
                 spreadsheetId=GOOGLE_SHEET_ID,
                 range=f"{SHEET_NAME}!A2",
-                valueInputOption="USER_ENTERED",
+                valueInputOption="RAW",
                 body={"values": new_values}
             ).execute()
         write_log(f"{stock_id} 清理完成，保留最新 {len(keep_rows)} 筆")
