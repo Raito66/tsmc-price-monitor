@@ -1,7 +1,10 @@
 import os
 import re
+import sys
 from dotenv import load_dotenv
 load_dotenv()
+
+sys.stdout.reconfigure(encoding='utf-8')
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -81,7 +84,17 @@ def apply_sheet_formatting(service):
         return
     try:
         requests = []
-        for col in [0, 1, 2, 7]:  # A=股票代號, B=名稱, C=日期, H=timestamp → 靠左
+        # A欄（股票代號）→ 純文字格式，防止 0050 被吃成 50
+        requests.append({"repeatCell": {
+            "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 10000,
+                      "startColumnIndex": 0, "endColumnIndex": 1},
+            "cell": {"userEnteredFormat": {
+                "horizontalAlignment": "LEFT",
+                "numberFormat": {"type": "TEXT"}
+            }},
+            "fields": "userEnteredFormat.horizontalAlignment,userEnteredFormat.numberFormat"
+        }})
+        for col in [1, 2, 7]:  # B=名稱, C=日期, H=timestamp → 靠左
             requests.append({"repeatCell": {
                 "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 10000,
                           "startColumnIndex": col, "endColumnIndex": col + 1},
