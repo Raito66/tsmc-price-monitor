@@ -424,9 +424,9 @@ def main():
 
     write_log(f"🕐 台灣時間：{now_str}")
 
-    # 台灣時間 09:00 前為盤前，略過本次執行
-    if hour < 9:
-        write_log("盤前時段（09:00 前），略過本次執行")
+    # 台灣時間 09:30 前為盤前，略過本次執行（09:00 整點剛開盤尚無盤中資料）
+    if hour < 9 or (hour == 9 and minute < 30):
+        write_log("盤前時段（09:30 前），略過本次執行")
         return
 
     service = get_sheets_service()
