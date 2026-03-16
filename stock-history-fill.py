@@ -50,7 +50,7 @@ def write_log(msg):
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     with open("error.log", "a", encoding="utf-8") as f:
         f.write(f"{now_str} {msg}\n")
-    print(msg)
+    print(f"{now_str} {msg}")
 
 def get_sheets_service():
     try:
@@ -66,6 +66,48 @@ def get_sheets_service():
     except Exception as e:
         write_log(f"⚠️ Google Sheets 連線失敗：{e}")
         return None
+
+def get_sheet_id(service, sheet_name):
+    try:
+        spreadsheet = service.spreadsheets().get(spreadsheetId=GOOGLE_SHEET_ID).execute()
+        for sheet in spreadsheet["sheets"]:
+            if sheet["properties"]["title"] == sheet_name:
+                return sheet["properties"]["sheetId"]
+    except Exception as e:
+        write_log(f"取得 sheet ID 失敗：{e}")
+    return None
+
+
+def apply_sheet_formatting(service):
+    """套用 Sheet1 欄位格式：文字靠左（A、B、C、H）、數字靠右（D、E、F、G）"""
+    sheet_id = get_sheet_id(service, SHEET_NAME)
+    if sheet_id is None:
+        write_log("⚠️ 無法取得 Sheet1 ID，跳過格式套用")
+        return
+    try:
+        requests = []
+        for col in [0, 1, 2, 7]:  # A=股票代號, B=名稱, C=日期, H=timestamp → 靠左
+            requests.append({"repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 10000,
+                          "startColumnIndex": col, "endColumnIndex": col + 1},
+                "cell": {"userEnteredFormat": {"horizontalAlignment": "LEFT"}},
+                "fields": "userEnteredFormat.horizontalAlignment"
+            }})
+        for col in [3, 4, 5, 6]:  # D=收盤價, E=MA5, F=MA20, G=MA60 → 靠右
+            requests.append({"repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 10000,
+                          "startColumnIndex": col, "endColumnIndex": col + 1},
+                "cell": {"userEnteredFormat": {"horizontalAlignment": "RIGHT"}},
+                "fields": "userEnteredFormat.horizontalAlignment"
+            }})
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            body={"requests": requests}
+        ).execute()
+        write_log("✅ Sheet1 欄位格式套用完成")
+    except Exception as e:
+        write_log(f"⚠️ Sheet1 格式套用失敗：{e}")
+
 
 def load_stock_list_from_sheets(service):
     """從 Config 分頁讀取股票清單（C欄=Y 才納入），失敗時回傳 None 使用預設清單。"""
@@ -300,6 +342,7 @@ def main():
     active_stock_name_map = sheets_stock_name_map if sheets_stock_name_map else STOCK_NAME_MAP
 
     fill_missing_history(service, dl, active_stock_list, active_stock_name_map)
+    apply_sheet_formatting(service)
 
     write_log("=== 補齊流程結束 ===")
 
