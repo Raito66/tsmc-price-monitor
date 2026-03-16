@@ -414,7 +414,7 @@ def save_to_sheets(service, stock_id, stock_name, date, price, ma5, ma20, ma60, 
         service.spreadsheets().values().append(
             spreadsheetId=GOOGLE_SHEET_ID,
             range=f"{SHEET_NAME}!A2",
-            valueInputOption="USER_ENTERED",
+            valueInputOption="RAW",
             body={"values": values}
         ).execute()
         write_log(f"{stock_id} 寫入 Sheets 成功：{date} - {price:.2f}")
