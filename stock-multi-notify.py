@@ -697,7 +697,7 @@ def main():
     # ──────────────── 國定假日：所有股票盤中均無即時資料 ────────────────
     if not is_yesterday_push and not is_today_push and holiday_skipped == len(active_stock_list):
         send_discord_push(
-            "📢 今日所有股票均無即時交易資料（可能為國定假日），本次略過盤中推播"
+            "📢 今日所有股票尚無盤中即時資料（可能剛開盤或資料源延遲），本次略過盤中推播"
         )
 
     # ──────────────── 只有完整執行才更新計數到 Sheets ────────────────
