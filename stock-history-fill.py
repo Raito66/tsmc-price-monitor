@@ -92,6 +92,7 @@ def load_stock_list_from_sheets(service):
             enabled = str(row[2]).strip().upper() if len(row) > 2 and row[2] else "Y"
 
             if enabled != "Y":
+                write_log(f"{stock_id} 啟用欄為 {enabled}，跳過")
                 continue
             if not re.match(r'^[0-9]{4,6}[A-Z]?$', stock_id):
                 write_log(f"⚠️ 代號格式錯誤，跳過：{stock_id}")
